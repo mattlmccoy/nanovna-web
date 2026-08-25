@@ -22,7 +22,8 @@ export function phase(value: Complex): number {
 }
 
 export function vswr(value: Complex): number {
-  const gamma = Math.min(magnitude(value), 0.999999);
+  const gamma = magnitude(value);
+  if (gamma >= 1) return Number.POSITIVE_INFINITY;
   return (1 + gamma) / (1 - gamma);
 }
 

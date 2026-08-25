@@ -22,6 +22,11 @@ test('complex display quantities retain sign and units-ready values', () => {
   assert.equal(vswr(reflection), 3);
 });
 
+test('VSWR does not hide invalid reflection magnitudes behind a finite clamp', () => {
+  assert.equal(vswr({ re: 1, im: 0 }), Number.POSITIVE_INFINITY);
+  assert.equal(vswr({ re: 1.2, im: 0 }), Number.POSITIVE_INFINITY);
+});
+
 test('bandwidth uses raw threshold crossings without smoothing', () => {
   const magnitudes = [0.8, 0.2, 0.1, 0.2, 0.8];
   const points: SweepPoint[] = magnitudes.map((value, index) => ({

@@ -44,6 +44,14 @@ export function atLeastVersion(version: string, expected: [number, number, numbe
   return true;
 }
 
+export function segmentRanges(start: number, stop: number, points: number, segments: number): Array<{ start: number; stop: number }> {
+  const step = Math.round((stop - start) / (points * segments - 1));
+  return Array.from({ length: segments }, (_, index) => {
+    const segmentStart = start + index * points * step;
+    return { start: segmentStart, stop: segmentStart + (points - 1) * step };
+  });
+}
+
 export class NanoVNAConnection {
   private port: SerialPortLike | null = null;
   private reader: SerialReader | null = null;
@@ -51,6 +59,7 @@ export class NanoVNAConnection {
   private decoder = new TextDecoder();
   private encoder = new TextEncoder();
   version = 'Unknown firmware';
+  supportsScan = false;
   supportsScanMask = false;
 
   static supported(): boolean {
@@ -71,6 +80,7 @@ export class NanoVNAConnection {
       const versionLines = await this.command('version');
       this.version = versionLines[0] || 'Unknown firmware';
       const help = (await this.command('help')).join(' ').toLowerCase();
+      this.supportsScan = help.includes('scan') && atLeastVersion(this.version, [0, 2, 0]);
       this.supportsScanMask = help.includes('scan') && atLeastVersion(this.version, [0, 7, 1]);
       return this.version;
     } catch (error) {
@@ -89,13 +99,13 @@ export class NanoVNAConnection {
     this.port = null;
   }
 
-  async sweep(start: number, stop: number, points: number, segments = 1, onProgress?: (value: number) => void): Promise<SweepPoint[]> {
+  async sweep(start: number, stop: number, points: number, segments = 1, onProgress?: (value: number) => void, isCancelled?: () => boolean): Promise<SweepPoint[]> {
     const result: SweepPoint[] = [];
-    for (let segment = 0; segment < segments; segment += 1) {
-      const segmentStart = Math.round(start + (stop - start) * segment / segments);
-      const segmentStop = Math.round(start + (stop - start) * (segment + 1) / segments);
-      const values = await this.readSegment(segmentStart, segmentStop, points);
-      result.push(...(segment === 0 ? values : values.slice(1)));
+    const ranges = segmentRanges(start, stop, points, segments);
+    for (let segment = 0; segment < ranges.length; segment += 1) {
+      if (isCancelled?.()) break;
+      const values = await this.readSegment(ranges[segment].start, ranges[segment].stop, points);
+      result.push(...values);
       onProgress?.((segment + 1) / segments);
     }
     return result;
@@ -115,7 +125,7 @@ export class NanoVNAConnection {
       }));
     }
 
-    await this.command(`sweep ${start} ${stop} ${points}`, 15000);
+    await this.command(`${this.supportsScan ? 'scan' : 'sweep'} ${start} ${stop} ${points}`, 15000);
     const frequencies = (await this.command('frequencies', 15000)).map(Number).filter(Number.isFinite);
     const s11 = (await this.command('data 0', 15000)).map(parseComplex).filter((value): value is Complex => value !== null);
     const s21 = (await this.command('data 1', 15000)).map(parseComplex).filter((value): value is Complex => value !== null);

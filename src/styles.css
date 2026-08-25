@@ -18,6 +18,9 @@ legend { padding: 0 5px; font-weight: 600; }
 .wide { width: 100%; margin-top: 7px; }
 .progress { height: 11px; margin-top: 8px; border: 1px solid #aaa; background: white; }
 .progress i { display: block; height: 100%; background: #2f76c2; }
+.check-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+.check-row input { min-height: 0; }
+.sweep-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 7px; }
 .marker-control { display: grid; grid-template-columns: 58px minmax(0, 1fr) 13px 18px; align-items: center; gap: 5px; margin-bottom: 5px; }
 .marker-control input[type='radio'] { min-height: 0; margin: 0; }
 .marker-control span { width: 12px; height: 18px; border: 1px solid #777; }
