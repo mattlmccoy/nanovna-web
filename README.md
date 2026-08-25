@@ -46,4 +46,6 @@ Behavior must be checked against the target device and firmware. Compare a calib
 
 ## Acknowledgment
 
-The device protocol and feature set were studied against [NanoVNA Saver](https://github.com/NanoVNA-Saver/nanovna-saver). This project does not bundle its Python or Qt code.
+The device protocol, sweep behavior, and feature set were studied against the original [NanoVNA Saver](https://github.com/NanoVNA-Saver/nanovna-saver) project created by Rune B. Broberg and maintained by its open-source contributors. NanoVNA Saver is distributed under [GPL-3.0-or-later](https://github.com/NanoVNA-Saver/nanovna-saver/blob/master/licenses/LICENSE.txt).
+
+NanoVNA Web is an independent browser implementation and does not bundle NanoVNA Saver's Python or Qt source code. See [NOTICE.md](NOTICE.md).

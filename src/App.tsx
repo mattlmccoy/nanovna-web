@@ -513,7 +513,7 @@ export default function App() {
           {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} onMarkerChange={updateMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
         </section>
       </div>
-      <div className="statusbar"><span>{message}</span><span>Units shown on every readout · device data remains local</span></div>
+      <div className="statusbar"><span>{message}</span><span>Units shown on every readout · device data remains local · Protocol reference: <a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a></span></div>
     </main>
   );
 }
