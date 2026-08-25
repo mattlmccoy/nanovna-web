@@ -54,13 +54,92 @@ function valuesForView(view: ComparisonView, points: SweepPoint[]): number[] {
   return [];
 }
 
-function downloadCanvas(canvas: HTMLCanvasElement, filename: string) {
-  canvas.toBlob((blob) => {
+function safeFilename(value: string): string {
+  return (value.replace(/\.[^.]+$/, '').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'comparison').slice(0, 120);
+}
+
+function drawFittedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maximumWidth: number) {
+  if (ctx.measureText(text).width <= maximumWidth) { ctx.fillText(text, x, y); return; }
+  let shortened = text;
+  while (shortened.length > 1 && ctx.measureText(`${shortened}…`).width > maximumWidth) shortened = shortened.slice(0, -1);
+  ctx.fillText(`${shortened}…`, x, y);
+}
+
+function finiteRange(values: number[]): { minimum: number; maximum: number } | null {
+  const finite = values.filter(Number.isFinite);
+  if (!finite.length) return null;
+  return finite.reduce(
+    (range, value) => ({ minimum: Math.min(range.minimum, value), maximum: Math.max(range.maximum, value) }),
+    { minimum: Number.POSITIVE_INFINITY, maximum: Number.NEGATIVE_INFINITY },
+  );
+}
+
+function exportSummary(dataset: ComparisonDataset, view: ComparisonView): string {
+  const analysis = analyzeSweep(dataset.points);
+  const impedanceText = `Z ${formatNumber(analysis.resistanceAtMinimum)} ${analysis.reactanceAtMinimum < 0 ? '−' : '+'} j${formatNumber(Math.abs(analysis.reactanceAtMinimum))} Ω`;
+  const minimumText = `min S11 ${formatNumber(analysis.minimumS11Db)} dB @ ${formatFrequency(analysis.minimumS11Frequency)}`;
+  if (view === 's21-db') return analysis.minimumS21Db === null
+    ? 'S21 unavailable'
+    : `S21 range ${formatNumber(analysis.minimumS21Db)} to ${formatNumber(analysis.maximumS21Db!)} dB`;
+  if (view === 's21-phase') {
+    const range = finiteRange(dataset.points.map((point) => phase(point.s21)));
+    return range ? `S21 phase range ${formatNumber(range.minimum, 1)}° to ${formatNumber(range.maximum, 1)}°` : 'S21 phase unavailable';
+  }
+  if (view === 's11-phase') {
+    const range = finiteRange(dataset.points.map((point) => phase(point.s11)));
+    return range ? `S11 phase range ${formatNumber(range.minimum, 1)}° to ${formatNumber(range.maximum, 1)}° · ${minimumText}` : `S11 phase unavailable · ${minimumText}`;
+  }
+  if (view === 's11-db') return `${minimumText} · contiguous −10 dB span ${analysis.bandwidth10Db === null ? 'not found' : formatFrequency(analysis.bandwidth10Db)}`;
+  if (view === 'vswr') return `minimum VSWR ${Number.isFinite(analysis.minimumVswr) ? `${formatNumber(analysis.minimumVswr)}:1` : '∞:1'} @ ${formatFrequency(analysis.minimumS11Frequency)} · ${minimumText}`;
+  if (view === 'resistance') return `${minimumText} · resistance there ${formatNumber(analysis.resistanceAtMinimum)} Ω`;
+  if (view === 'reactance') return `${minimumText} · reactance there ${formatNumber(analysis.reactanceAtMinimum)} Ω`;
+  return `${minimumText} · ${impedanceText}`;
+}
+
+function downloadComparisonReport(canvas: HTMLCanvasElement, datasets: ComparisonDataset[], view: ComparisonView, theme: 'light' | 'dark', commonSpan: { start: number; stop: number } | null) {
+  const ratio = window.devicePixelRatio || 1;
+  const reportWidth = Math.max(canvas.width, Math.round(1100 * ratio));
+  const plotHeight = Math.round(canvas.height * reportWidth / canvas.width);
+  const footerHeight = Math.round((78 + datasets.length * 22) * ratio);
+  const report = document.createElement('canvas');
+  report.width = reportWidth;
+  report.height = plotHeight + footerHeight;
+  const ctx = report.getContext('2d');
+  if (!ctx) return;
+  ctx.drawImage(canvas, 0, 0, reportWidth, plotHeight);
+  ctx.save();
+  ctx.scale(ratio, ratio);
+  const width = reportWidth / ratio;
+  const top = plotHeight / ratio;
+  const dark = theme === 'dark';
+  ctx.fillStyle = dark ? '#232427' : '#f1f1ed';
+  ctx.fillRect(0, top, width, footerHeight / ratio);
+  ctx.fillStyle = '#f1d51c';
+  ctx.fillRect(0, top, width, 3);
+  ctx.fillStyle = dark ? '#f0f0eb' : '#242421';
+  ctx.font = 'bold 12px Arial, sans-serif';
+  ctx.fillText(`Measurement comparison · ${VIEW_LABELS[view]}`, 14, top + 20);
+  ctx.font = '10px Arial, sans-serif';
+  drawFittedText(ctx, `Exported: ${new Date().toISOString()} · ${datasets.length} visible file${datasets.length === 1 ? '' : 's'} · original sample grids, no interpolation`, 14, top + 37, width - 28);
+  drawFittedText(ctx, `Common frequency span: ${commonSpan ? `${formatFrequency(commonSpan.start)} – ${formatFrequency(commonSpan.stop)}` : datasets.length > 1 ? 'none' : 'not applicable'}`, 14, top + 53, width - 28);
+  drawFittedText(ctx, 'Summary values below cover each file’s full listed span; contiguous −10 dB span is centered on that file’s lowest S11 sample.', 14, top + 69, width - 28);
+  datasets.forEach((dataset, index) => {
+    const analysis = analyzeSweep(dataset.points);
+    const analysisText = exportSummary(dataset, view);
+    const y = top + 91 + index * 22;
+    ctx.fillStyle = dataset.color;
+    ctx.fillRect(14, y - 10, 10, 10);
+    ctx.fillStyle = dark ? '#f0f0eb' : '#242421';
+    drawFittedText(ctx, `${dataset.name} · ${analysis.pointCount} points · ${formatFrequency(analysis.startFrequency)} – ${formatFrequency(analysis.stopFrequency)} · ${analysisText}`, 31, y, width - 45);
+  });
+  ctx.restore();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  report.toBlob((blob) => {
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = filename;
+    link.download = `${safeFilename(datasets.map((dataset) => dataset.name).join('-vs-'))}-${view}-${timestamp}.png`;
     link.click();
     URL.revokeObjectURL(url);
   }, 'image/png');
@@ -246,7 +325,7 @@ export function ComparisonMode({ open, onClose, datasets, setDatasets, theme }: 
             <select value={view} onChange={(event) => setView(event.target.value as ComparisonView)} aria-label="Comparison diagnostic">
               {Object.entries(VIEW_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
-            <button onClick={() => { const canvas = document.querySelector<HTMLCanvasElement>('.comparison-canvas'); if (canvas) downloadCanvas(canvas, `comparison-${view}-${Date.now()}.png`); }} disabled={!visible.length}>Save PNG</button>
+            <button onClick={() => { const canvas = document.querySelector<HTMLCanvasElement>('.comparison-canvas'); if (canvas) downloadComparisonReport(canvas, visible, view, theme, commonSpan); }} disabled={!visible.length}>Save PNG</button>
           </div>
           <div className="comparison-chart-wrap">
             {visible.length ? <ComparisonChart datasets={visible} view={view} theme={theme} /> : <div className="comparison-empty">Add files and enable at least one trace.</div>}

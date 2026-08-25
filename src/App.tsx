@@ -6,6 +6,7 @@ import { ComparisonMode, type ComparisonDataset } from './components/ComparisonM
 
 type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
 type Marker = { id: number; index: number; color: string };
+type PlotExportContext = { sourceName: string; sourceKind: 'demo' | 'file' | 'device'; device: string; calibration: string };
 
 const VIEW_LABELS: Record<ViewMode, string> = {
   smith: 'S11 Smith Chart',
@@ -80,6 +81,17 @@ function formatAxisFrequency(value: number): string {
 function formatNumber(value: number, digits = 3): string {
   if (!Number.isFinite(value)) return '—';
   return value.toFixed(digits);
+}
+
+function safeFilename(value: string): string {
+  return (value.replace(/\.[^.]+$/, '').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'measurement').slice(0, 120);
+}
+
+function drawFittedText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maximumWidth: number) {
+  if (ctx.measureText(text).width <= maximumWidth) { ctx.fillText(text, x, y); return; }
+  let shortened = text;
+  while (shortened.length > 1 && ctx.measureText(`${shortened}…`).width > maximumWidth) shortened = shortened.slice(0, -1);
+  ctx.fillText(`${shortened}…`, x, y);
 }
 
 function admittance(gamma: Complex): Complex {
@@ -228,13 +240,14 @@ function suggestPlots(points: SweepPoint[]): PlotSuggestion[] {
   return suggestions;
 }
 
-function Chart({ mode, points, reference, markers, activeMarker, theme, onMarkerChange, onActiveMarkerChange, onModeChange }: {
+function Chart({ mode, points, reference, markers, activeMarker, theme, exportContext, onMarkerChange, onActiveMarkerChange, onModeChange }: {
   mode: ViewMode;
   points: SweepPoint[];
   reference: SweepPoint[] | null;
   markers: Marker[];
   activeMarker: number;
   theme: 'light' | 'dark';
+  exportContext: PlotExportContext;
   onMarkerChange: (marker: number, index: number) => void;
   onActiveMarkerChange: (marker: number) => void;
   onModeChange: (mode: ViewMode) => void;
@@ -489,14 +502,48 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
     const base = canvasRef.current;
     const overlay = markerCanvasRef.current;
     if (!base || !overlay) return;
+    const ratio = window.devicePixelRatio || 1;
+    const reportWidth = Math.max(base.width, Math.round(900 * ratio));
+    const plotHeight = Math.round(base.height * reportWidth / base.width);
+    const footerHeight = Math.round((76 + markers.length * 18) * ratio);
     const composite = document.createElement('canvas');
-    composite.width = base.width;
-    composite.height = base.height;
+    composite.width = reportWidth;
+    composite.height = plotHeight + footerHeight;
     const ctx = composite.getContext('2d');
     if (!ctx) return;
-    ctx.drawImage(base, 0, 0);
-    ctx.drawImage(overlay, 0, 0);
-    composite.toBlob((blob) => blob && downloadBlob(blob, `${mode}-${Date.now()}.png`), 'image/png');
+    ctx.drawImage(base, 0, 0, reportWidth, plotHeight);
+    ctx.drawImage(overlay, 0, 0, reportWidth, plotHeight);
+    ctx.save();
+    ctx.scale(ratio, ratio);
+    const width = reportWidth / ratio;
+    const top = plotHeight / ratio;
+    const dark = theme === 'dark';
+    ctx.fillStyle = dark ? '#232427' : '#f1f1ed';
+    ctx.fillRect(0, top, width, footerHeight / ratio);
+    ctx.fillStyle = '#f1d51c';
+    ctx.fillRect(0, top, width, 3);
+    ctx.fillStyle = dark ? '#f0f0eb' : '#242421';
+    ctx.font = 'bold 12px Arial, sans-serif';
+    drawFittedText(ctx, VIEW_LABELS[mode], 14, top + 20, width - 28);
+    ctx.font = '10px Arial, sans-serif';
+    const sourceLabel = exportContext.sourceKind === 'file' ? `Source file: ${exportContext.sourceName}` : `Source: ${exportContext.sourceName}`;
+    drawFittedText(ctx, `${sourceLabel} · Exported: ${new Date().toISOString()}`, 14, top + 36, width - 28);
+    const averageStep = (points.at(-1)!.frequency - points[0].frequency) / Math.max(1, points.length - 1);
+    const uniform = points.length < 3 || points.slice(1).every((point, index) => Math.abs((point.frequency - points[index].frequency) - averageStep) <= Math.max(1e-6 * Math.abs(averageStep), 1e-6));
+    const gridLabel = uniform ? `uniform step ${formatFrequency(averageStep)}` : `nonuniform grid · average interval ${formatFrequency(averageStep)}`;
+    drawFittedText(ctx, `Sweep: ${formatFrequency(points[0].frequency)} – ${formatFrequency(points.at(-1)!.frequency)} · ${points.length} samples · ${gridLabel} · reference ${reference ? 'shown' : 'none'}`, 14, top + 51, width - 28);
+    drawFittedText(ctx, `Device: ${exportContext.device} · device-reported calibration state: ${exportContext.calibration} · processing: original sample grid, no browser smoothing`, 14, top + 66, width - 28);
+    markers.forEach((marker, index) => {
+      const point = points[marker.index];
+      const y = top + 84 + index * 18;
+      ctx.fillStyle = marker.color;
+      ctx.fillRect(14, y - 9, 9, 9);
+      ctx.fillStyle = dark ? '#f0f0eb' : '#242421';
+      drawFittedText(ctx, `M${index + 1} · ${formatFrequency(point.frequency)} · ${chartMarkerValue(mode, point, marker.index, delayValues)}`, 30, y, width - 44);
+    });
+    ctx.restore();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    composite.toBlob((blob) => blob && downloadBlob(blob, `${safeFilename(exportContext.sourceName)}-${mode}-${timestamp}.png`), 'image/png');
   }
 
   return (
@@ -568,6 +615,7 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [continuous, setContinuous] = useState(false);
   const [message, setMessage] = useState('Demo data shown. Browser smoothing OFF. Device calibration state unknown.');
+  const [sourceInfo, setSourceInfo] = useState<PlotExportContext>({ sourceName: 'Demo sweep', sourceKind: 'demo', device: 'Offline demo', calibration: 'Not applicable' });
   const initial = markerIndex(points);
   const [markers, setMarkers] = useState<Marker[]>([
     { id: 1, index: initial, color: TRACE.blue },
@@ -686,6 +734,7 @@ export default function App() {
         if (data.length) {
           setPoints(data);
           remapMarkersToFrequencies(data);
+          setSourceInfo({ sourceName: `${firmware} live sweep`, sourceKind: 'device', device: firmware, calibration: calibrationState });
           setMessage(`Sweep complete · ${data.length} samples · browser smoothing OFF · device calibration: ${calibrationState}.`);
         }
       } while (continuous && !stopRequestedRef.current);
@@ -721,6 +770,7 @@ export default function App() {
       const data = parseMeasurementFile(await file.text(), file.name);
       setPoints(data);
       remapMarkersToFrequencies(data);
+      setSourceInfo({ sourceName: file.name, sourceKind: 'file', device: 'Imported file', calibration: 'Not provided by source' });
       setMessage(`Loaded ${file.name} · ${data.length} samples.`);
     } catch (error) { setMessage(`File load failed: ${(error as Error).message}`); }
   }
@@ -771,7 +821,7 @@ export default function App() {
         </section>
 
         <section className="charts-grid">
-          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} onMarkerChange={updateMarker} onActiveMarkerChange={setActiveMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
+          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} exportContext={sourceInfo} onMarkerChange={updateMarker} onActiveMarkerChange={setActiveMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
         </section>
       </div>
       <div className="statusbar"><span>{message}</span><span className="status-actions"><a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a><button onClick={() => setAboutOpen(true)}>About</button></span></div>
