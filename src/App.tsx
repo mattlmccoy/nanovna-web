@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { NanoVNAConnection } from './lib/nanovna';
 import { parseMeasurementFile } from './lib/files';
 import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, phase, reflectedPowerPercent, type Complex, type SweepPoint, vswr } from './lib/rf';
+import { ComparisonMode, type ComparisonDataset } from './components/ComparisonMode';
 
 type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
 type Marker = { id: number; index: number; color: string };
@@ -576,6 +577,8 @@ export default function App() {
   const [activeMarker, setActiveMarker] = useState(0);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparisonDatasets, setComparisonDatasets] = useState<ComparisonDataset[]>([]);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const bw = useMemo(() => bandwidth(points), [points]);
@@ -752,7 +755,7 @@ export default function App() {
             <div className={`serial-status ${connected ? 'online' : ''}`}>{connected ? `Connected · 115200 baud` : 'No serial port connected'}</div>
             <button className="wide" onClick={toggleConnection} disabled={busy}>{connected ? 'Disconnect' : 'Connect to NanoVNA'}</button>
           </fieldset>
-          <fieldset><legend>Files</legend><div className="file-buttons"><label className="file-picker">Load CSV / Touchstone…<input type="file" accept=".csv,.s1p,.s2p" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadMeasurement(file); event.target.value = ''; }} /></label><button onClick={exportCsv}>Raw S11/S21 CSV…</button><button onClick={exportTouchstone}>S11 Touchstone .s1p…</button></div><small>S21 remains in CSV because the NanoVNA does not measure the S12/S22 values required for a complete .s2p file. Each plot saves directly to PNG.</small></fieldset>
+          <fieldset><legend>Files</legend><div className="file-buttons"><label className="file-picker">Load CSV / Touchstone…<input type="file" accept=".csv,.s1p,.s2p" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadMeasurement(file); event.target.value = ''; }} /></label><button onClick={() => setComparisonOpen(true)}>Compare measurements…</button><button onClick={exportCsv}>Raw S11/S21 CSV…</button><button onClick={exportTouchstone}>S11 Touchstone .s1p…</button></div><small>S21 remains in CSV because the NanoVNA does not measure the S12/S22 values required for a complete .s2p file. Each plot saves directly to PNG.</small></fieldset>
         </aside>
 
         <section className="readouts-column">
@@ -798,6 +801,7 @@ export default function App() {
           </div>
         </section>
       </div>}
+      <ComparisonMode open={comparisonOpen} onClose={() => setComparisonOpen(false)} datasets={comparisonDatasets} setDatasets={setComparisonDatasets} theme={theme} />
     </main>
   );
 }
