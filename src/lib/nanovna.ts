@@ -35,7 +35,7 @@ function versionTuple(version: string): number[] {
   return match ? match.slice(1).map(Number) : [0, 0, 0];
 }
 
-function atLeast(version: string, expected: [number, number, number]): boolean {
+export function atLeastVersion(version: string, expected: [number, number, number]): boolean {
   const current = versionTuple(version);
   for (let index = 0; index < expected.length; index += 1) {
     if (current[index] > expected[index]) return true;
@@ -60,18 +60,23 @@ export class NanoVNAConnection {
   async connect(): Promise<string> {
     const serial = (navigator as SerialNavigator).serial;
     if (!serial) throw new Error('Web Serial is unavailable. Use desktop Chrome or Edge.');
-    this.port = await serial.requestPort();
-    await this.port.open({ baudRate: 115200, bufferSize: 65536 });
-    if (!this.port.readable || !this.port.writable) throw new Error('The selected serial port is not readable and writable.');
-    this.reader = this.port.readable.getReader();
-    this.writer = this.port.writable.getWriter();
-    await this.write('\r');
-    await this.readUntilPrompt(3000).catch(() => []);
-    const versionLines = await this.command('version');
-    this.version = versionLines[0] || 'Unknown firmware';
-    const help = (await this.command('help')).join(' ').toLowerCase();
-    this.supportsScanMask = help.includes('scan') && atLeast(this.version, [0, 7, 1]);
-    return this.version;
+    try {
+      this.port = await serial.requestPort();
+      await this.port.open({ baudRate: 115200, bufferSize: 65536 });
+      if (!this.port.readable || !this.port.writable) throw new Error('The selected serial port is not readable and writable.');
+      this.reader = this.port.readable.getReader();
+      this.writer = this.port.writable.getWriter();
+      await this.write('\r');
+      await this.readUntilPrompt(3000);
+      const versionLines = await this.command('version');
+      this.version = versionLines[0] || 'Unknown firmware';
+      const help = (await this.command('help')).join(' ').toLowerCase();
+      this.supportsScanMask = help.includes('scan') && atLeastVersion(this.version, [0, 7, 1]);
+      return this.version;
+    } catch (error) {
+      await this.disconnect();
+      throw error;
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -138,10 +143,21 @@ export class NanoVNAConnection {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error('NanoVNA did not respond before the command timed out.');
       const read = this.reader.read();
-      const result = await Promise.race([
-        read,
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('NanoVNA command timed out.')), remaining)),
-      ]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let result: { value?: Uint8Array; done: boolean };
+      try {
+        result = await Promise.race([
+          read,
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('NanoVNA command timed out. Reconnect the device before retrying.')), remaining); }),
+        ]);
+      } catch (error) {
+        try { await this.reader.cancel(); } catch { /* cancellation is best effort */ }
+        try { this.reader.releaseLock(); } catch { /* lock may already be released */ }
+        this.reader = null;
+        throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       if (result.done) throw new Error('The serial connection closed unexpectedly.');
       if (result.value) text += this.decoder.decode(result.value, { stream: true });
     }

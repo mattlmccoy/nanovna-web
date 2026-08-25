@@ -11,7 +11,7 @@ Browser interface for NanoVNA devices.
 - Three movable markers with frequency, impedance, admittance, S11, S21, phase, and VSWR readouts
 - Four configurable diagnostic panes
 - Smith, polar, log magnitude, phase, VSWR, impedance, admittance, S-parameter component, group-delay, Q, capacitance, inductance, and S21 series/shunt views
-- Per-plot PNG export and raw CSV export
+- Per-plot PNG export, raw CSV export, S11 Touchstone `.s1p`, and labeled partial `.s2p` export
 
 ## Run locally
 

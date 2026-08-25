@@ -378,6 +378,21 @@ export default function App() {
     downloadBlob(new Blob([rows.join('\n')], { type: 'text/csv' }), `nanovna-sweep-${Date.now()}.csv`);
   }
 
+  function exportTouchstone(twoPort: boolean) {
+    const rows = [
+      '! NanoVNA Web raw complex sweep',
+      '! No smoothing or resampling applied',
+      ...(twoPort ? ['! S12 and S22 are not measured by NanoVNA and are written as zero'] : []),
+      '# Hz S RI R 50',
+    ];
+    points.forEach((point) => {
+      rows.push(twoPort
+        ? [point.frequency, point.s11.re, point.s11.im, point.s21.re, point.s21.im, 0, 0, 0, 0].join(' ')
+        : [point.frequency, point.s11.re, point.s11.im].join(' '));
+    });
+    downloadBlob(new Blob([rows.join('\n')], { type: 'text/plain' }), `nanovna-sweep-${Date.now()}.${twoPort ? 's2p' : 's1p'}`);
+  }
+
   return (
     <main className="application">
       <div className="window-title">NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} raw points</div>
@@ -399,7 +414,7 @@ export default function App() {
             <div className={`serial-status ${connected ? 'online' : ''}`}>{connected ? `Connected · 115200 baud` : 'No serial port connected'}</div>
             <button className="wide" onClick={toggleConnection} disabled={busy}>{connected ? 'Disconnect' : 'Connect to NanoVNA'}</button>
           </fieldset>
-          <fieldset><legend>Files</legend><button onClick={exportCsv}>Export raw CSV…</button><small>Each plot also saves directly to PNG.</small></fieldset>
+          <fieldset><legend>Files</legend><div className="file-buttons"><button onClick={exportCsv}>Raw CSV…</button><button onClick={() => exportTouchstone(false)}>S11 .s1p…</button><button onClick={() => exportTouchstone(true)}>S11/S21 .s2p…</button></div><small>The .s2p export labels unmeasured S12/S22 values as zero. Each plot saves directly to PNG.</small></fieldset>
         </aside>
 
         <section className="readouts-column">
