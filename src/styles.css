@@ -30,6 +30,9 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .serial-status { margin-bottom: 7px; padding: 6px; border: 1px inset #bbb; background: #f7f7f7; color: #666; }
 .serial-status.online { color: #067723; background: #effbef; }
 .file-buttons { display: grid; grid-template-columns: 1fr; gap: 5px; }
+.file-picker { min-height: 25px; display: grid; place-items: center; padding: 3px 9px; border: 1px solid #9c9c9c; border-radius: 2px; background: linear-gradient(#fff, #e7e7e7); cursor: pointer; }
+.file-picker:hover { background: linear-gradient(#fff, #d8e9f7); border-color: #6289a8; }
+.file-picker input { display: none; }
 .marker-readout > div { display: grid; grid-template-columns: 104px 1fr; gap: 7px; margin: 4px 0; }
 .marker-readout b { overflow: hidden; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .trace-key { display: grid; gap: 5px; font-weight: 600; }

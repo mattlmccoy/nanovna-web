@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { NanoVNAConnection } from './lib/nanovna';
+import { parseMeasurementFile } from './lib/files';
 import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, phase, type Complex, type SweepPoint, vswr } from './lib/rf';
 
 type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
@@ -79,6 +80,26 @@ function groupDelay(points: SweepPoint[], channel: 's11' | 's21'): number[] {
   });
 }
 
+function primaryTrace(mode: ViewMode, points: SweepPoint[]): number[] {
+  if (mode === 'return-loss') return points.map((point) => db(point.s11));
+  if (mode === 's21-gain') return points.map((point) => db(point.s21));
+  if (mode === 'phase') return points.map((point) => phase(point.s11));
+  if (mode === 'vswr') return points.map((point) => vswr(point.s11)).map((value) => Number.isFinite(value) ? value : Number.NaN);
+  if (mode === 'resistance-reactance') return points.map((point) => impedance(point.s11).re);
+  if (mode === 'admittance') return points.map((point) => admittance(point.s11).re * 1000);
+  if (mode === 's11-magnitude') return points.map((point) => magnitude(point.s11));
+  if (mode === 's11-z-magnitude') return points.map((point) => magnitude(impedance(point.s11)));
+  if (mode === 's11-components') return points.map((point) => point.s11.re);
+  if (mode === 's21-components') return points.map((point) => point.s21.re);
+  if (mode === 's11-group-delay') return groupDelay(points, 's11');
+  if (mode === 's21-group-delay') return groupDelay(points, 's21');
+  if (mode === 'q-factor') return points.map((point) => { const z = impedance(point.s11); return z.re === 0 ? Number.NaN : Math.abs(z.im / z.re); });
+  if (mode === 'capacitance') return points.map((point) => { const x = impedance(point.s11).im; return x < 0 ? -1 / (2 * Math.PI * point.frequency * x) * 1e12 : Number.NaN; });
+  if (mode === 'inductance') return points.map((point) => { const x = impedance(point.s11).im; return x > 0 ? x / (2 * Math.PI * point.frequency) * 1e9 : Number.NaN; });
+  if (mode === 's21-series-z' || mode === 's21-shunt-z') return points.map((point) => s21Impedance(point.s21, mode === 's21-shunt-z').re);
+  return [];
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -88,9 +109,10 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function Chart({ mode, points, markers, activeMarker, onMarkerChange, onModeChange }: {
+function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange, onModeChange }: {
   mode: ViewMode;
   points: SweepPoint[];
+  reference: SweepPoint[] | null;
   markers: Marker[];
   activeMarker: number;
   onMarkerChange: (marker: number, index: number) => void;
@@ -171,6 +193,10 @@ function Chart({ mode, points, markers, activeMarker, onMarkerChange, onModeChan
       }
       const channel = mode === 'smith' ? 's11' : 's21';
       const positions = points.map((point) => ({ x: cx + point[channel].re * radius, y: cy - point[channel].im * radius }));
+      if (reference?.length) {
+        const referencePositions = reference.map((point) => ({ x: cx + point[channel].re * radius, y: cy - point[channel].im * radius }));
+        ctx.setLineDash([4, 3]); line(referencePositions, '#777777'); ctx.setLineDash([]);
+      }
       line(positions, mode === 'smith' ? TRACE.magenta : TRACE.yellow);
       markers.forEach((marker, index) => drawMarker(marker.index, marker.color, positions[marker.index], index));
       return;
@@ -232,6 +258,15 @@ function Chart({ mode, points, markers, activeMarker, onMarkerChange, onModeChan
       line(positions, color);
       return positions;
     });
+    if (reference?.length) {
+      const values = primaryTrace(mode, reference);
+      const positions = values.map((value, index) => ({
+        x: area.x + area.w * (reference[index].frequency - points[0].frequency) / Math.max(1, points.at(-1)!.frequency - points[0].frequency),
+        y: area.y + area.h * (max - Math.max(min, Math.min(max, value))) / (max - min),
+      }));
+      ctx.setLineDash([4, 3]); line(positions, '#777777'); ctx.setLineDash([]);
+      ctx.fillStyle = '#555'; ctx.fillText('Ref', area.x + area.w - 24, 6);
+    }
     markers.forEach((marker, index) => {
       const position = positionsBySeries[0][marker.index];
       if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) drawMarker(marker.index, marker.color, position, index);
@@ -242,7 +277,7 @@ function Chart({ mode, points, markers, activeMarker, onMarkerChange, onModeChan
       ctx.fillStyle = '#222';
       ctx.fillText(`${item.label} (${item.unit})`, area.x + 16 + index * 86, 6);
     });
-  }, [activeMarker, markers, mode, points]);
+  }, [activeMarker, markers, mode, points, reference]);
 
   function selectNearest(event: React.MouseEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
@@ -312,6 +347,7 @@ export default function App() {
   const connectionRef = useRef<NanoVNAConnection | null>(null);
   const stopRequestedRef = useRef(false);
   const [points, setPoints] = useState(() => demoSweep(1e6, 51e6, 1001));
+  const [reference, setReference] = useState<SweepPoint[] | null>(null);
   const [start, setStart] = useState('1M');
   const [stop, setStop] = useState('51M');
   const [pointCount, setPointCount] = useState(101);
@@ -411,6 +447,16 @@ export default function App() {
     downloadBlob(new Blob([rows.join('\n')], { type: 'text/plain' }), `nanovna-sweep-${Date.now()}.s1p`);
   }
 
+  async function loadMeasurement(file: File) {
+    try {
+      const data = parseMeasurementFile(await file.text(), file.name);
+      setPoints(data);
+      const minimum = markerIndex(data);
+      setMarkers((current) => current.map((marker, index) => ({ ...marker, index: index === 0 ? minimum : Math.min(marker.index, data.length - 1) })));
+      setMessage(`Loaded ${file.name} · ${data.length} samples.`);
+    } catch (error) { setMessage(`File load failed: ${(error as Error).message}`); }
+  }
+
   return (
     <main className="application">
       <div className="window-title">NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} raw points</div>
@@ -429,11 +475,12 @@ export default function App() {
           <fieldset><legend>Measurement summary</legend>
             <div className="summary"><span>Samples:</span><b>{points.length} points</b><span>Frequency step:</span><b>{formatFrequency((points.at(-1)!.frequency - points[0].frequency) / Math.max(1, points.length - 1))}</b><span>−10 dB bandwidth:</span><b>{bw === null ? 'Not found' : formatFrequency(bw)}</b><span>Browser smoothing:</span><b>OFF</b><span>Device calibration:</span><b>Unknown</b></div>
           </fieldset>
+          <fieldset><legend>Reference sweep</legend><button className="wide" onClick={() => setReference(points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })))}>Set current as reference</button><button className="wide" onClick={() => setReference(null)} disabled={!reference}>Clear reference</button><small>{reference ? `${reference.length} reference points · dashed gray trace` : 'No reference trace loaded'}</small></fieldset>
           <fieldset><legend>Serial port control</legend>
             <div className={`serial-status ${connected ? 'online' : ''}`}>{connected ? `Connected · 115200 baud` : 'No serial port connected'}</div>
             <button className="wide" onClick={toggleConnection} disabled={busy}>{connected ? 'Disconnect' : 'Connect to NanoVNA'}</button>
           </fieldset>
-          <fieldset><legend>Files</legend><div className="file-buttons"><button onClick={exportCsv}>Raw S11/S21 CSV…</button><button onClick={exportTouchstone}>S11 Touchstone .s1p…</button></div><small>S21 remains in CSV because the NanoVNA does not measure the S12/S22 values required for a complete .s2p file. Each plot saves directly to PNG.</small></fieldset>
+          <fieldset><legend>Files</legend><div className="file-buttons"><label className="file-picker">Load CSV / Touchstone…<input type="file" accept=".csv,.s1p,.s2p" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadMeasurement(file); event.target.value = ''; }} /></label><button onClick={exportCsv}>Raw S11/S21 CSV…</button><button onClick={exportTouchstone}>S11 Touchstone .s1p…</button></div><small>S21 remains in CSV because the NanoVNA does not measure the S12/S22 values required for a complete .s2p file. Each plot saves directly to PNG.</small></fieldset>
         </aside>
 
         <section className="readouts-column">
@@ -442,7 +489,7 @@ export default function App() {
         </section>
 
         <section className="charts-grid">
-          {views.map((view, index) => <Chart key={index} mode={view} points={points} markers={markers} activeMarker={activeMarker} onMarkerChange={updateMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
+          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} onMarkerChange={updateMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
         </section>
       </div>
       <div className="statusbar"><span>{message}</span><span>Units shown on every readout · device data remains local</span></div>

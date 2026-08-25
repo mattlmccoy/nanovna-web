@@ -10,9 +10,11 @@ Browser interface for NanoVNA devices.
 - Single and continuous sweep modes with segment-boundary stop handling
 - Raw device samples with no smoothing, curve fitting, or hidden resampling
 - Three movable markers with frequency, impedance, admittance, S11, S21, phase, and VSWR readouts
+- Capturable reference sweep overlaid as a dashed trace
 - Four configurable diagnostic panes
 - Smith, polar, log magnitude, phase, VSWR, impedance, admittance, S-parameter component, group-delay, Q, capacitance, inductance, and S21 series/shunt views
 - Per-plot PNG export, raw S11/S21 CSV export, and S11 Touchstone `.s1p` export
+- File loading for NanoVNA Web CSV and Touchstone `.s1p`/`.s2p` in RI, magnitude-angle, or dB-angle format
 
 ## Run locally
 
