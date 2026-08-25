@@ -104,6 +104,25 @@ export function assembleCurrentSweep(frequencyLines: string[], s11Lines: string[
   return frequencies.map((frequency, index) => ({ frequency, s11: s11[index], s21: s21[index] }));
 }
 
+function mean(values: Complex[]): Complex {
+  return { re: values.reduce((sum, value) => sum + value.re, 0) / values.length, im: values.reduce((sum, value) => sum + value.im, 0) / values.length };
+}
+
+export function averageSweepSets(sets: SweepPoint[][], truncateCount = 0): SweepPoint[] {
+  if (!sets.length || !sets[0].length) throw new Error('No sweep data were available to average.');
+  if (!Number.isInteger(truncateCount) || truncateCount < 0 || truncateCount >= sets.length) throw new Error('Truncated-average discard count must be a nonnegative integer smaller than the number of measurements.');
+  const count = sets[0].length;
+  if (sets.some((set) => set.length !== count || set.some((point, index) => point.frequency !== sets[0][index].frequency))) throw new Error('Averaged sweeps must use identical frequency grids.');
+  const averageChannel = (index: number, channel: 's11' | 's21') => {
+    const samples = sets.map((set) => set[index][channel]);
+    if (!truncateCount) return mean(samples);
+    const center = mean(samples);
+    const retained = samples.slice().sort((a, b) => Math.hypot(a.re - center.re, a.im - center.im) - Math.hypot(b.re - center.re, b.im - center.im)).slice(0, samples.length - truncateCount);
+    return mean(retained);
+  };
+  return sets[0].map((point, index) => ({ frequency: point.frequency, s11: averageChannel(index, 's11'), s21: averageChannel(index, 's21') }));
+}
+
 export class NanoVNAConnection {
   private port: SerialPortLike | null = null;
   private reader: SerialReader | null = null;
@@ -169,20 +188,27 @@ export class NanoVNAConnection {
     this.port = null;
   }
 
-  async sweep(start: number, stop: number, points: number, segments = 1, onSegment?: (update: SweepUpdate) => void, isCancelled?: () => boolean): Promise<SweepResult> {
+  async sweep(start: number, stop: number, points: number, segments = 1, averages = 1, truncateCount = 0, onSegment?: (update: SweepUpdate) => void, isCancelled?: () => boolean): Promise<SweepResult> {
     return this.runExclusive(async () => {
-    const result: SweepPoint[] = [];
-    const ranges = segmentRanges(start, stop, points, segments);
-    let completedSegments = 0;
-    for (let segment = 0; segment < ranges.length; segment += 1) {
-      if (isCancelled?.()) break;
-      const values = await this.readSegment(ranges[segment].start, ranges[segment].stop, points);
-      result.push(...values);
-      completedSegments = segment + 1;
-      onSegment?.({ points: result.slice(), completedSegments, totalSegments: segments, progress: completedSegments / segments });
-    }
-    const cancelled = Boolean(isCancelled?.()) && completedSegments < segments;
-    return { points: result, completedSegments, totalSegments: segments, progress: completedSegments / segments, cancelled, complete: completedSegments === segments };
+      if (!Number.isInteger(averages) || averages < 1 || averages > 99) throw new Error('Averages must be an integer from 1 through 99.');
+      if (!Number.isInteger(truncateCount) || truncateCount < 0 || truncateCount >= averages) throw new Error('Truncated-average discard count must be smaller than the number of averages.');
+      const result: SweepPoint[] = [];
+      const ranges = segmentRanges(start, stop, points, segments);
+      let completedSegments = 0;
+      for (let segment = 0; segment < ranges.length; segment += 1) {
+        if (isCancelled?.()) break;
+        const measurements: SweepPoint[][] = [];
+        for (let repeat = 0; repeat < averages; repeat += 1) {
+          if (isCancelled?.()) break;
+          measurements.push(await this.readSegment(ranges[segment].start, ranges[segment].stop, points));
+        }
+        if (measurements.length !== averages) break;
+        result.push(...averageSweepSets(measurements, truncateCount));
+        completedSegments = segment + 1;
+        onSegment?.({ points: result.slice(), completedSegments, totalSegments: segments, progress: completedSegments / segments });
+      }
+      const cancelled = Boolean(isCancelled?.()) && completedSegments < segments;
+      return { points: result, completedSegments, totalSegments: segments, progress: completedSegments / segments, cancelled, complete: completedSegments === segments };
     });
   }
 

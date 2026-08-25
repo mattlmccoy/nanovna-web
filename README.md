@@ -6,6 +6,10 @@ Browser interface for NanoVNA devices.
 
 - Direct USB serial connection at 115200 baud in desktop Chrome and Edge
 - Automatic follow mode for the NanoVNA's latest `frequencies`, `data 0`, and `data 1` buffers without changing device sweep settings; inconsistent or changing grids are rejected and the last valid plot is marked stale
+- Live sweep analysis for VSWR bands, S11 resonances, raw-sample peaks, and low/high/band-pass/band-stop filter response
+- Bandpass TDR with selectable window and velocity factor; nonuniform grids are rejected rather than silently resampled
+- Single and truncated-mean sweep averaging with processing provenance in plot and Touchstone exports
+- Delta markers against another marker or the reference sweep
 - Firmware capability detection and device-reported calibration-state readout when supported
 - NanoVNA shell support for `version`, `help`, `sweep`, `scan`, `frequencies`, `data 0`, and `data 1`
 - Multi-segment S11/S21 sweeps

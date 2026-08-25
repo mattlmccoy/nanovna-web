@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assembleCurrentSweep, atLeastVersion, parseShellCommands, segmentRanges, validateCalibrationSlot } from './nanovna.ts';
+import { assembleCurrentSweep, atLeastVersion, averageSweepSets, parseShellCommands, segmentRanges, validateCalibrationSlot } from './nanovna.ts';
 
 test('firmware comparison is lexicographic, not component-wise', () => {
   assert.equal(atLeastVersion('0.7.1', [0, 7, 1]), true);
@@ -48,4 +48,11 @@ test('current device buffers reject malformed rows and grid changes rather than 
   assert.throws(() => assembleCurrentSweep(frequencies, ['bad row', '0.3 0.4'], s21, frequencies), /malformed/);
   assert.throws(() => assembleCurrentSweep(frequencies, s11, s21, ['1000000', '2100000']), /changed/);
   assert.throws(() => assembleCurrentSweep(['2000000', '1000000'], s11, s21, ['2000000', '1000000']), /strictly increasing/);
+});
+
+test('averaging and truncated averaging are deterministic and preserve the grid', () => {
+  const make = (value: number) => [{ frequency: 1, s11: { re: value, im: 0 }, s21: { re: value * 2, im: 0 } }];
+  assert.equal(averageSweepSets([make(1), make(2), make(3)])[0].s11.re, 2);
+  assert.equal(averageSweepSets([make(1), make(2), make(100)], 1)[0].s11.re, 1.5);
+  assert.throws(() => averageSweepSets([make(1), [{ ...make(2)[0], frequency: 2 }]]), /identical frequency grids/);
 });

@@ -3,10 +3,12 @@ import { NanoVNAConnection, type CalibrationStep, type NanoVNACapabilities } fro
 import { parseMeasurementFile } from './lib/files';
 import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, phase, reflectedPowerPercent, type Complex, type SweepPoint, vswr } from './lib/rf';
 import { ComparisonMode, type ComparisonDataset } from './components/ComparisonMode';
+import { AnalysisPanel } from './components/AnalysisPanel';
+import { TdrPanel } from './components/TdrPanel';
 
 type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
 type Marker = { id: number; index: number; color: string };
-type PlotExportContext = { sourceName: string; sourceKind: 'demo' | 'file' | 'device'; device: string; calibration: string };
+type PlotExportContext = { sourceName: string; sourceKind: 'demo' | 'file' | 'device'; device: string; calibration: string; processing?: string };
 
 const VIEW_LABELS: Record<ViewMode, string> = {
   smith: 'S11 Smith Chart',
@@ -77,6 +79,11 @@ function formatFrequency(value: number): string {
   if (value >= 1e6) return `${(value / 1e6).toFixed(6)} MHz`;
   if (value >= 1e3) return `${(value / 1e3).toFixed(3)} kHz`;
   return `${value.toFixed(0)} Hz`;
+}
+
+function formatFrequencyDelta(value: number): string {
+  const sign = value < 0 ? '−' : '';
+  return `${sign}${formatFrequency(Math.abs(value))}`;
 }
 
 function formatAxisFrequency(value: number): string {
@@ -540,7 +547,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
     const uniform = points.length < 3 || points.slice(1).every((point, index) => Math.abs((point.frequency - points[index].frequency) - averageStep) <= Math.max(1e-6 * Math.abs(averageStep), 1e-6));
     const gridLabel = uniform ? `uniform step ${formatFrequency(averageStep)}` : `nonuniform grid · average interval ${formatFrequency(averageStep)}`;
     drawFittedText(ctx, `Sweep: ${formatFrequency(points[0].frequency)} – ${formatFrequency(points.at(-1)!.frequency)} · ${points.length} samples · ${gridLabel} · reference ${reference ? 'shown' : 'none'}`, 14, top + 51, width - 28);
-    drawFittedText(ctx, `Device: ${exportContext.device} · device-reported calibration state: ${exportContext.calibration} · processing: original sample grid, no browser smoothing`, 14, top + 66, width - 28);
+    drawFittedText(ctx, `Device: ${exportContext.device} · device-reported calibration state: ${exportContext.calibration} · processing: ${exportContext.processing ?? 'original sample grid, no browser smoothing'}`, 14, top + 66, width - 28);
     markers.forEach((marker, index) => {
       const point = points[marker.index];
       const y = top + 84 + index * 18;
@@ -605,6 +612,20 @@ function MarkerReadout({ point, number }: { point: SweepPoint; number: number })
   );
 }
 
+function DeltaMarkerReadout({ first, second, referenceMode }: { first: SweepPoint; second: SweepPoint; referenceMode: boolean }) {
+  const firstZ = impedance(first.s11);
+  const secondZ = impedance(second.s11);
+  return <fieldset className="marker-readout delta-readout">
+    <legend>Delta marker · {referenceMode ? 'M1 − reference' : 'M1 − M2'}</legend>
+    <div><span>Frequency Δ:</span><b>{formatFrequencyDelta(first.frequency - second.frequency)}</b></div>
+    <div><span>S11 log mag Δ:</span><b>{formatNumber(db(first.s11) - db(second.s11))} dB</b></div>
+    <div><span>S11 phase Δ:</span><b>{formatNumber(phase(first.s11) - phase(second.s11), 1)}°</b></div>
+    <div><span>Resistance Δ:</span><b>{formatNumber(firstZ.re - secondZ.re)} Ω</b></div>
+    <div><span>Reactance Δ:</span><b>{formatNumber(firstZ.im - secondZ.im)} Ω</b></div>
+    <div><span>S21 gain Δ:</span><b>{formatNumber(db(first.s21) - db(second.s21))} dB</b></div>
+  </fieldset>;
+}
+
 export default function App() {
   const connectionRef = useRef<NanoVNAConnection | null>(null);
   const stopRequestedRef = useRef(false);
@@ -616,6 +637,8 @@ export default function App() {
   const [stop, setStop] = useState('51M');
   const [pointCount, setPointCount] = useState(101);
   const [segments, setSegments] = useState(10);
+  const [averages, setAverages] = useState(1);
+  const [truncateCount, setTruncateCount] = useState(0);
   const [connected, setConnected] = useState(false);
   const [firmware, setFirmware] = useState('No device');
   const [calibrationState, setCalibrationState] = useState('Unknown');
@@ -638,15 +661,23 @@ export default function App() {
     { id: 3, index: Math.round(points.length * 0.84), color: TRACE.green },
   ]);
   const [activeMarker, setActiveMarker] = useState(0);
+  const [deltaMarker, setDeltaMarker] = useState(false);
+  const [deltaReference, setDeltaReference] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [tdrOpen, setTdrOpen] = useState(false);
   const [comparisonDatasets, setComparisonDatasets] = useState<ComparisonDataset[]>([]);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
   const [suggestedPane, setSuggestedPane] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const bw = useMemo(() => bandwidth(points), [points]);
   const plotSuggestions = useMemo(() => suggestPlots(points), [points]);
+  const deltaReferencePoint = useMemo(() => {
+    if (!reference?.length || !markers[0] || !points[markers[0].index]) return null;
+    const frequency = points[markers[0].index].frequency;
+    return reference.reduce((best, point) => Math.abs(point.frequency - frequency) < Math.abs(best.frequency - frequency) ? point : best, reference[0]);
+  }, [markers, points, reference]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -679,8 +710,13 @@ export default function App() {
           setFollowStatus(`Stale · ${detail}`);
           setSourceInfo((current) => ({
             ...current,
-            sourceName: current.sourceName.endsWith(' (stale)') ? current.sourceName : `${current.sourceName} (stale)`,
+            sourceName: current.sourceKind !== 'device' || current.sourceName.endsWith(' (stale)') ? current.sourceName : `${current.sourceName} (stale)`,
           }));
+          if (/malformed|nonfinite|frequency grid changed|not strictly increasing|incomplete current display/i.test(detail)) {
+            setMessage(`A device-buffer snapshot was rejected; the last valid plot is marked stale while acquisition retries. ${detail}`);
+            await wait();
+            continue;
+          }
           setFollowDevice(false);
           setMessage(`Device-buffer following stopped; the last valid plot is marked stale. ${detail}`);
           break;
@@ -693,16 +729,17 @@ export default function App() {
   }, [busy, calibrationState, capabilities.currentData, connected, firmware, followDevice]);
 
   useEffect(() => {
-    if (!aboutOpen && !helpOpen && !calibrationOpen) return;
+    if (!aboutOpen && !helpOpen && !calibrationOpen && !tdrOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       setAboutOpen(false);
       setHelpOpen(false);
+      setTdrOpen(false);
       if (!busy) setCalibrationOpen(false);
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [aboutOpen, busy, calibrationOpen, helpOpen]);
+  }, [aboutOpen, busy, calibrationOpen, helpOpen, tdrOpen]);
 
   function updateMarker(marker: number, index: number) {
     setMarkers((current) => current.map((item, candidate) => candidate === marker ? { ...item, index } : item));
@@ -731,6 +768,18 @@ export default function App() {
 
   function setMarkerColor(marker: number, color: string) {
     setMarkers((current) => current.map((item, index) => index === marker ? { ...item, color } : item));
+  }
+
+  function placeMarkers(indices: number[]) {
+    if (!indices.length) return;
+    setMarkers((current) => {
+      const next = current.map((marker, index) => index < indices.length ? { ...marker, index: indices[index] } : marker);
+      for (let index = next.length; index < indices.length; index += 1) {
+        next.push({ id: markerIdRef.current++, index: indices[index], color: DEFAULT_MARKER_COLORS[index % DEFAULT_MARKER_COLORS.length] });
+      }
+      return next;
+    });
+    setActiveMarker(0);
   }
 
   function remapMarkersToFrequencies(data: SweepPoint[]) {
@@ -793,26 +842,28 @@ export default function App() {
     setBusy(true); setProgress(0); stopRequestedRef.current = false;
     let retainedPartial: SweepPoint[] = [];
     let retainedSegments = 0;
+    const processing = averages > 1 ? `${averages}-measurement complex mean${truncateCount ? `, ${truncateCount} farthest sample${truncateCount === 1 ? '' : 's'} discarded per frequency` : ''}; no smoothing` : 'original sample grid, no browser smoothing';
+    const sweepLabel = averages > 1 ? `${firmware} averaged live sweep (${averages}/${truncateCount})` : `${firmware} live sweep`;
     try {
       do {
         retainedPartial = [];
         retainedSegments = 0;
         setProgress(0);
         const calibrationAtAcquisition = calibrationState;
-        const result = await connectionRef.current.sweep(parseFrequency(start), parseFrequency(stop), pointCount, segments, (update) => {
+        const result = await connectionRef.current.sweep(parseFrequency(start), parseFrequency(stop), pointCount, segments, averages, truncateCount, (update) => {
           retainedPartial = update.points;
           retainedSegments = update.completedSegments;
           setProgress(update.progress);
           setPoints(update.points);
           remapMarkersToFrequencies(update.points);
-          setSourceInfo({ sourceName: `${firmware} live sweep`, sourceKind: 'device', device: firmware, calibration: calibrationAtAcquisition });
-          setMessage(`Live sweep · segment ${update.completedSegments} of ${update.totalSegments} · ${update.points.length} samples displayed.`);
+          setSourceInfo({ sourceName: sweepLabel, sourceKind: 'device', device: firmware, calibration: calibrationAtAcquisition, processing });
+          setMessage(`${averages > 1 ? 'Averaged' : 'Live'} sweep · segment ${update.completedSegments} of ${update.totalSegments} · ${update.points.length} samples displayed.`);
         }, () => stopRequestedRef.current);
         if (result.points.length) {
           setMessage(result.complete
             ? `Sweep complete · ${result.points.length} samples · browser smoothing OFF · device calibration: ${calibrationAtAcquisition}.`
             : `Partial sweep stopped · ${result.completedSegments} of ${result.totalSegments} segments · ${result.points.length} samples retained and labeled partial.`);
-          setSourceInfo({ sourceName: `${firmware} ${result.complete ? 'live sweep' : 'partial sweep'}`, sourceKind: 'device', device: firmware, calibration: calibrationAtAcquisition });
+          setSourceInfo({ sourceName: result.complete ? sweepLabel : `${sweepLabel} partial`, sourceKind: 'device', device: firmware, calibration: calibrationAtAcquisition, processing });
         } else if (result.cancelled) {
           setMessage('Sweep stopped before the first segment completed. Existing measurement remains displayed.');
         }
@@ -820,7 +871,7 @@ export default function App() {
     } catch (error) {
       const detail = (error as Error).message;
       if (retainedPartial.length) {
-        setSourceInfo({ sourceName: `${firmware} incomplete sweep`, sourceKind: 'device', device: firmware, calibration: calibrationState });
+        setSourceInfo({ sourceName: `${sweepLabel} incomplete`, sourceKind: 'device', device: firmware, calibration: calibrationState, processing });
         setMessage(`Sweep failed after ${retainedSegments} segment${retainedSegments === 1 ? '' : 's'}; ${retainedPartial.length} retained samples are incomplete. ${detail}`);
       } else setMessage(`Sweep failed: ${detail}`);
       if (/serial|connection|closed|timed out|not connected/i.test(detail)) {
@@ -941,8 +992,8 @@ export default function App() {
 
   function exportTouchstone() {
     const rows = [
-      '! NanoVNA Web raw complex sweep',
-      '! No smoothing or resampling applied',
+      '! NanoVNA Web complex sweep',
+      `! Processing: ${sourceInfo.processing ?? 'original sample grid, no browser smoothing'}`,
       '# Hz S RI R 50',
     ];
     points.forEach((point) => {
@@ -981,6 +1032,7 @@ export default function App() {
           <fieldset><legend>Sweep control</legend>
             <div className="form-grid"><label>Start</label><input value={start} onChange={(e) => setStart(e.target.value)} /><label>Stop</label><input value={stop} onChange={(e) => setStop(e.target.value)} /><label>Points / segment</label><select value={pointCount} onChange={(e) => setPointCount(Number(e.target.value))}>{[11, 51, 101, 201, 301, 401, 801].map((value) => <option key={value}>{value}</option>)}</select><label>Segments</label><input type="number" min="1" max="100" value={segments} onChange={(e) => setSegments(Number(e.target.value))} /></div>
             <label className="check-row"><input type="checkbox" checked={continuous} onChange={(e) => setContinuous(e.target.checked)} /> Continuous sweep</label>
+            <details className="sweep-processing"><summary>Averaging</summary><div className="form-grid"><label>Measurements</label><input type="number" min="1" max="99" value={averages} onChange={(event) => { const value = Math.max(1, Math.min(99, Math.round(Number(event.target.value) || 1))); setAverages(value); setTruncateCount((current) => Math.min(current, value - 1)); }} /><label>Discard outliers</label><input type="number" min="0" max={Math.max(0, averages - 1)} value={truncateCount} onChange={(event) => setTruncateCount(Math.max(0, Math.min(averages - 1, Math.round(Number(event.target.value) || 0))))} /></div><small>Averaging is OFF at 1. Higher values alter the data and are labeled in plot exports.</small></details>
             <div className="progress"><i style={{ width: `${progress * 100}%` }} /></div>
             <div className="sweep-buttons"><button onClick={runSweep} disabled={busy || !connected}>Sweep</button><button onClick={stopSweep} disabled={!busy}>Stop</button></div>
           </fieldset>
@@ -993,10 +1045,13 @@ export default function App() {
               <button className="marker-remove" onClick={() => removeMarker(index)} disabled={markers.length <= 1} aria-label={`Remove marker ${index + 1}`}>−</button>
             </div>)}
             <div className="marker-actions"><button onClick={addMarker}>Add marker</button><button onClick={() => removeMarker(activeMarker)} disabled={markers.length <= 1}>Remove selected</button></div>
+            <label className="check-row"><input type="checkbox" checked={deltaMarker} onChange={(event) => setDeltaMarker(event.target.checked)} disabled={markers.length < 2 && !reference} /> Delta marker</label>
+            {deltaMarker && <label className="check-row"><input type="checkbox" checked={deltaReference} onChange={(event) => setDeltaReference(event.target.checked)} disabled={!reference} /> Compare M1 with reference sweep</label>}
             <small>Drag a marker on any plot, or enter its frequency.</small>
           </fieldset>
           <fieldset><legend>Measurement summary</legend>
             <div className="summary"><span>Samples:</span><b>{points.length} points</b><span>Frequency step:</span><b>{formatFrequency((points.at(-1)!.frequency - points[0].frequency) / Math.max(1, points.length - 1))}</b><span>−10 dB bandwidth:</span><b>{bw === null ? 'Not found' : formatFrequency(bw)}</b><span>Browser smoothing:</span><b>OFF</b><span>Device calibration:</span><b title={calibrationState}>{calibrationState}</b></div>
+            <button className="wide" onClick={() => setTdrOpen(true)}>Time Domain Reflectometry…</button>
           </fieldset>
           <fieldset><legend>Reference sweep</legend><button className="wide" onClick={() => setReference(points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })))}>Set current as reference</button><button className="wide" onClick={() => setReference(null)} disabled={!reference}>Clear reference</button><small>{reference ? `${reference.length} reference points · dashed gray trace` : 'No reference trace loaded'}</small></fieldset>
           <fieldset><legend>Serial port control</legend>
@@ -1012,11 +1067,13 @@ export default function App() {
             <div className="calibration-slots"><label>Slot<select value={calibrationSlot} onChange={(event) => setCalibrationSlot(Number(event.target.value))}>{[0, 1, 2, 3, 4].map((slot) => <option key={slot}>{slot}</option>)}</select></label><button onClick={recallCalibrationSlot} disabled={!connected || busy || !capabilities.calibrationSlots}>Recall</button><button onClick={saveCalibrationSlot} disabled={!connected || busy || !capabilities.calibrationSlots}>Save</button></div>
             <small>{!connected ? 'Connect a device to detect calibration support.' : !capabilities.calibration ? 'This firmware did not advertise the cal command.' : capabilities.calibrationSlots ? 'Slots 0–4 are the common range across supported NanoVNA firmware.' : 'Calibration is available, but save/recall commands were not advertised.'}</small>
           </fieldset>
-          <fieldset><legend>Files</legend><div className="file-buttons"><label className="file-picker">Load CSV / Touchstone…<input type="file" accept=".csv,.s1p,.s2p" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadMeasurement(file); event.target.value = ''; }} /></label><button onClick={compareCurrentMeasurement}>Compare current measurement…</button><button onClick={() => setComparisonOpen(true)}>Open comparison workspace…</button><button onClick={exportCsv}>Raw S11/S21 CSV…</button><button onClick={exportTouchstone}>S11 Touchstone .s1p…</button></div><small>S21 remains in CSV because the NanoVNA does not measure the S12/S22 values required for a complete .s2p file. Each plot saves directly to PNG.</small></fieldset>
+          <fieldset><legend>Files</legend><div className="file-buttons"><label className="file-picker">Load CSV / Touchstone…<input type="file" accept=".csv,.s1p,.s2p" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadMeasurement(file); event.target.value = ''; }} /></label><button onClick={compareCurrentMeasurement}>Compare current measurement…</button><button onClick={() => setComparisonOpen(true)}>Open comparison workspace…</button><button onClick={exportCsv}>Complex S11/S21 CSV…</button><button onClick={exportTouchstone}>S11 Touchstone .s1p…</button></div><small>S21 remains in CSV because the NanoVNA does not measure the S12/S22 values required for a complete .s2p file. Each plot saves directly to PNG.</small></fieldset>
         </aside>
 
         <section className="readouts-column">
+          <AnalysisPanel points={points} live={connected && followDevice && !followStatus.startsWith('Stale')} onMoveMarkers={placeMarkers} />
           {markers.map((marker, index) => <MarkerReadout key={marker.id} point={points[marker.index]} number={index + 1} />)}
+          {deltaMarker && markers[0] && (deltaReference ? deltaReferencePoint : markers[1] && points[markers[1].index]) && <DeltaMarkerReadout first={points[markers[0].index]} second={deltaReference ? deltaReferencePoint! : points[markers[1].index]} referenceMode={deltaReference} />}
           <fieldset><legend>Trace colors</legend><div className="trace-key"><span style={{ color: TRACE.magenta }}>━ S11</span><span style={{ color: TRACE.yellow }}>━ S21</span><span style={{ color: TRACE.cyan }}>━ Resistance / conductance</span><span style={{ color: TRACE.red }}>━ Reactance / susceptance</span></div></fieldset>
           <details className="analysis-guide">
             <summary>Suggested views</summary>
@@ -1085,6 +1142,7 @@ export default function App() {
         </section>
       </div>}
       <ComparisonMode open={comparisonOpen} onClose={() => setComparisonOpen(false)} datasets={comparisonDatasets} setDatasets={setComparisonDatasets} theme={theme} />
+      {tdrOpen && <TdrPanel points={points} sourceName={sourceInfo.sourceName} onClose={() => setTdrOpen(false)} />}
     </main>
   );
 }
