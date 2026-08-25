@@ -13,7 +13,7 @@ const MODE_LABELS: Record<AnalysisMode, string> = {
   'band-stop': 'Band-stop filter',
 };
 
-export function AnalysisPanel({ points, live, onMoveMarkers }: { points: SweepPoint[]; live: boolean; onMoveMarkers: (indices: number[]) => void }) {
+export function AnalysisPanel({ points, live, processing, onMoveMarkers }: { points: SweepPoint[]; live: boolean; processing: string; onMoveMarkers: (indices: number[]) => void }) {
   const [open, setOpen] = useState(true);
   const [mode, setMode] = useState<AnalysisMode>('overview');
   const [vswrLimit, setVswrLimit] = useState(1.5);
@@ -23,7 +23,7 @@ export function AnalysisPanel({ points, live, onMoveMarkers }: { points: SweepPo
   const result = useMemo(() => runAnalysis(points, mode, { vswrLimit, peakMetric, peakDirection, peakCount }), [mode, peakCount, peakDirection, peakMetric, points, vswrLimit]);
 
   return <details className="analysis-panel" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary><span>Analysis</span><i className={live ? 'live' : ''}>{live ? 'LIVE' : 'CURRENT DATA'}</i></summary>
+    <summary><span>Analysis</span><i className={live ? 'live' : ''}>{live ? 'LIVE' : 'CURRENT DATA'}{processing.includes('complex mean') ? ' · AVERAGED' : ''}</i></summary>
     <div className="analysis-panel-content">
       <label>Analysis type<select value={mode} onChange={(event) => setMode(event.target.value as AnalysisMode)}>{Object.entries(MODE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       {mode === 'vswr' && <label>VSWR limit<input type="number" min="1" max="25" step="0.1" value={vswrLimit} onChange={(event) => setVswrLimit(Number(event.target.value))} /></label>}

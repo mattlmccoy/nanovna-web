@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { analyzeFilter, analyzePeak, analyzeResonance, analyzeVswr } from './analysis.ts';
+import { analyzeFilter, analyzeOverview, analyzePeak, analyzeResonance, analyzeVswr } from './analysis.ts';
 import type { SweepPoint } from './rf.ts';
 
 function point(frequency: number, s11Re: number, s11Im: number, s21Magnitude = 1): SweepPoint {
@@ -34,4 +34,24 @@ test('low-pass analysis interpolates the minus three dB crossing', () => {
   const result = analyzeFilter(data, 'low-pass');
   assert.match(result.summary, /found/);
   assert.match(result.rows.find((row) => row.label === '−3 dB cutoff')?.value ?? '', /3.5 MHz/);
+});
+
+test('band-stop width is referenced to the passband baseline, not notch minimum', () => {
+  const gains = [-1, -1, -40, -1, -1];
+  const data = gains.map((gain, index) => point((index + 1) * 1e6, 0, 0, 10 ** (gain / 20)));
+  const result = analyzeFilter(data, 'band-stop');
+  const width = result.rows.find((row) => row.label.includes('Stop width'));
+  assert.ok(width);
+  assert.match(width.value, /MHz/);
+  assert.doesNotMatch(width.label, /notch/);
+});
+
+test('transmission analyses report unavailable S21 instead of fabricated extrema', () => {
+  const data = [point(1, 0, 0), point(2, 0, 0), point(3, 0, 0)];
+  data.forEach((sample) => { sample.s21 = { re: Number.NaN, im: Number.NaN }; });
+  assert.match(analyzeFilter(data, 'low-pass').summary, /unavailable/);
+  assert.equal(analyzeOverview(data).rows.find((row) => row.label === 'S21')?.value, 'Unavailable in this dataset');
+  const peak = analyzePeak(data, { peakMetric: 's21-db' });
+  assert.match(peak.summary, /unavailable/);
+  assert.deepEqual(peak.markerIndices, []);
 });

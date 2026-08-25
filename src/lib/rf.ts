@@ -44,6 +44,11 @@ export function markerIndex(points: SweepPoint[]): number {
   return points.reduce((best, point, index) => db(point.s11) < db(points[best].s11) ? index : best, 0);
 }
 
+export function nearestPointByFrequency(points: SweepPoint[], frequency: number): SweepPoint | null {
+  if (!points.length) return null;
+  return points.reduce((best, point) => Math.abs(point.frequency - frequency) < Math.abs(best.frequency - frequency) ? point : best, points[0]);
+}
+
 export function bandwidth(points: SweepPoint[], threshold = -10): number | null {
   if (points.length < 2) return null;
   const marker = markerIndex(points);

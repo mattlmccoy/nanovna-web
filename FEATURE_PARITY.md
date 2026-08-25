@@ -4,8 +4,8 @@ NanoVNA Saver commit `3445a0a` is the behavioral reference used for this audit. 
 
 ## Acquisition and device control
 
-- Implemented: Web Serial connection, firmware command detection, current-buffer following, strict grid validation, segmented sweeps, continuous sweeps, stop between device responses, single/truncated complex averaging, partial-sweep retention, device calibration state and slots.
-- Remaining: logarithmic sweep generation, supported-device bandwidth/power/attenuator controls, device screenshots, network serial, broader model-specific command adapters, replay fixtures for each firmware family.
+- Implemented: Web Serial connection, firmware command detection, current-buffer following, strict grid validation, linear and logarithmic segmented sweeps, continuous sweeps, stop between device responses, single/truncated complex averaging, partial-sweep retention, device calibration state and slots, and firmware-advertised bandwidth control for direct-Hz and Dislord command families.
+- Remaining: supported-device power/attenuator controls, device screenshots, network serial, broader model-specific command adapters, replay fixtures for each firmware family.
 
 ## Calibration
 
@@ -14,8 +14,8 @@ NanoVNA Saver commit `3445a0a` is the behavioral reference used for this audit. 
 
 ## Plots and markers
 
-- Implemented: Smith, polar, log magnitude, gain, phase, VSWR, magnitude, impedance/admittance, real/imaginary, group delay, Q, series C/L, series/shunt S21 fixture models, arbitrary draggable markers, marker colors, delta/reference markers, per-plot live readouts, plot PNG reports, reference sweep, bandpass TDR.
-- Remaining: low-pass TDR response modes, permeability/core-parameter plots, signal-analyzer mode, chart bands and VSWR limit lines, user-defined axis limits, point/line/font/trace display controls, chart popouts and saved layouts.
+- Implemented: Smith, polar, S11/S21 log and linear magnitude, gain, phase, VSWR, impedance/admittance, real/imaginary, group delay, Q, series C/L, series/shunt S21 fixture models, arbitrary draggable markers, marker colors, delta/reference markers, per-plot live readouts, plot PNG reports, reference sweep, bandpass TDR, strict measured-DC low-pass TDR response modes, frequency bands, VSWR limit lines, and persistent point/line/marker/trace display controls.
+- Remaining: permeability/core-parameter plots, signal-analyzer mode, user-defined axis limits, font controls, chart popouts and saved layouts.
 
 ## Quantitative analysis
 

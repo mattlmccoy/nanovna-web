@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bandwidth, db, demoSweep, impedance, magnitude, phase, reflectedPowerPercent, vswr, type SweepPoint } from './rf.ts';
+import { bandwidth, db, demoSweep, impedance, magnitude, nearestPointByFrequency, phase, reflectedPowerPercent, vswr, type SweepPoint } from './rf.ts';
 
 test('matched load produces 50 ohms and VSWR 1:1', () => {
   const reflection = { re: 0, im: 0 };
@@ -48,4 +48,10 @@ test('demo trace has the requested unresampled point count', () => {
   assert.equal(points.length, 101);
   assert.equal(points[0].frequency, 1e6);
   assert.equal(points.at(-1)?.frequency, 2e6);
+});
+
+test('reference matching uses nearest frequency rather than array index', () => {
+  const points = demoSweep(1e6, 5e6, 5);
+  assert.equal(nearestPointByFrequency(points, 3.7e6)?.frequency, 4e6);
+  assert.equal(nearestPointByFrequency([], 3.7e6), null);
 });

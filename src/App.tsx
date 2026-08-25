@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { NanoVNAConnection, type CalibrationStep, type NanoVNACapabilities } from './lib/nanovna';
 import { parseMeasurementFile } from './lib/files';
-import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, phase, reflectedPowerPercent, type Complex, type SweepPoint, vswr } from './lib/rf';
+import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, nearestPointByFrequency, phase, reflectedPowerPercent, type Complex, type SweepPoint, vswr } from './lib/rf';
 import { ComparisonMode, type ComparisonDataset } from './components/ComparisonMode';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { TdrPanel } from './components/TdrPanel';
+import { DEFAULT_DISPLAY_SETTINGS, DisplaySettingsPanel, type DisplaySettings } from './components/DisplaySettingsPanel';
 
-type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
+type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's21-magnitude' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
 type Marker = { id: number; index: number; color: string };
 type PlotExportContext = { sourceName: string; sourceKind: 'demo' | 'file' | 'device'; device: string; calibration: string; processing?: string };
 
@@ -19,6 +20,7 @@ const VIEW_LABELS: Record<ViewMode, string> = {
   phase: 'S11 / S21 Phase (°)',
   vswr: 'S11 VSWR (ratio)',
   's21-gain': 'S21 Gain (dB)',
+  's21-magnitude': 'S21 Magnitude (ratio)',
   's11-magnitude': 'S11 Magnitude |Γ| (ratio)',
   's11-z-magnitude': 'S11 Impedance |Z| (Ω)',
   's11-components': 'S11 Real + Imaginary (ratio)',
@@ -41,6 +43,7 @@ const VIEW_HELP: Record<ViewMode, { what: string; interpret: string }> = {
   phase: { what: 'Shows the phase angle of S11 and S21 in degrees.', interpret: 'Sharp phase rotation often accompanies a resonance. Phase becomes unreliable where the corresponding magnitude approaches zero.' },
   vswr: { what: 'Expresses S11 mismatch as voltage standing-wave ratio.', interpret: '1:1 is ideal. Lower is better; common acceptance limits depend on the device and application.' },
   's21-gain': { what: 'Shows transmitted S21 magnitude in decibels.', interpret: 'For a passive two-port, values below 0 dB indicate insertion loss. Ripple or narrow dips can reveal resonances or fixture effects.' },
+  's21-magnitude': { what: 'Shows the linear magnitude of complex S21.', interpret: 'A value of 1 is unity transmission and 0 is no measured transmission. This is the same acquired S21 data without decibel conversion.' },
   's11-magnitude': { what: 'Shows the magnitude of the reflection coefficient |Γ| as a dimensionless ratio.', interpret: '0 is a perfect match and 1 is complete reflection. Reflected power fraction is |Γ|².' },
   's11-z-magnitude': { what: 'Shows the magnitude of the impedance derived from S11.', interpret: 'Useful for overall scale, but it hides whether the impedance is resistive, inductive, or capacitive.' },
   's11-components': { what: 'Shows the real and imaginary components of complex S11.', interpret: 'Use this when validating raw complex reflection data or comparing against another instrument or model.' },
@@ -156,6 +159,7 @@ function chartMarkerValue(mode: ViewMode, point: SweepPoint, index: number, dela
   if (mode === 'phase') return `S11 ${formatNumber(phase(point.s11), 1)}° · S21 ${formatNumber(phase(point.s21), 1)}°`;
   if (mode === 'vswr') return `VSWR ${Number.isFinite(vswr(point.s11)) ? `${formatNumber(vswr(point.s11), 3)}:1` : '∞:1'}`;
   if (mode === 's21-gain') return `S21 ${formatNumber(db(point.s21), 2)} dB`;
+  if (mode === 's21-magnitude') return `|S21| ${formatNumber(magnitude(point.s21), 4)} ratio`;
   if (mode === 's11-magnitude') return `|Γ| ${formatNumber(magnitude(point.s11), 4)} ratio`;
   if (mode === 's11-z-magnitude') return `|Z| ${formatNumber(magnitude(z), 2)} Ω`;
   if (mode === 's11-components') return `Re ${signedValue(point.s11.re, 4)} · Im ${signedValue(point.s11.im, 4)} ratio`;
@@ -168,21 +172,27 @@ function chartMarkerValue(mode: ViewMode, point: SweepPoint, index: number, dela
   return `R ${formatNumber(model.re, 2)} Ω · X ${signedValue(model.im, 2, 'Ω')}`;
 }
 
-function drawCanvasMarker(ctx: CanvasRenderingContext2D, position: { x: number; y: number }, color: string, label: number, dark: boolean, active: boolean) {
+function drawCanvasMarker(ctx: CanvasRenderingContext2D, position: { x: number; y: number }, color: string, label: number, dark: boolean, active: boolean, settings: DisplaySettings) {
+  const half = settings.markerSize * .625;
+  const height = settings.markerSize * 1.125;
   if (active) {
     ctx.strokeStyle = dark ? '#f4e65d' : '#6f6300';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(position.x, position.y - 4, 8, 0, Math.PI * 2);
+    ctx.arc(position.x, position.y - height / 2, settings.markerSize, 0, Math.PI * 2);
     ctx.stroke();
   }
-  ctx.fillStyle = color;
+  ctx.fillStyle = settings.filledMarkers ? color : (dark ? '#17181a' : '#fff');
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(position.x, position.y);
-  ctx.lineTo(position.x - 5, position.y - 9);
-  ctx.lineTo(position.x + 5, position.y - 9);
+  ctx.lineTo(position.x - half, position.y - height);
+  ctx.lineTo(position.x + half, position.y - height);
   ctx.closePath();
   ctx.fill();
+  ctx.stroke();
+  if (!settings.showMarkerNumbers) return;
   ctx.fillStyle = dark ? '#f1f1ed' : '#111';
   ctx.font = `${active ? 'bold ' : ''}10px Arial, sans-serif`;
   ctx.fillText(`M${label + 1}`, position.x + 6, position.y - 4);
@@ -191,6 +201,7 @@ function drawCanvasMarker(ctx: CanvasRenderingContext2D, position: { x: number; 
 function primaryTrace(mode: ViewMode, points: SweepPoint[]): number[] {
   if (mode === 'return-loss') return points.map((point) => db(point.s11));
   if (mode === 's21-gain') return points.map((point) => db(point.s21));
+  if (mode === 's21-magnitude') return points.map((point) => magnitude(point.s21));
   if (mode === 'phase') return points.map((point) => phase(point.s11));
   if (mode === 'vswr') return points.map((point) => vswr(point.s11)).map((value) => Number.isFinite(value) ? value : Number.NaN);
   if (mode === 'resistance-reactance') return points.map((point) => impedance(point.s11).re);
@@ -255,7 +266,7 @@ function suggestPlots(points: SweepPoint[]): PlotSuggestion[] {
   return suggestions;
 }
 
-function Chart({ mode, points, reference, markers, activeMarker, theme, exportContext, onMarkerChange, onActiveMarkerChange, onModeChange }: {
+function Chart({ mode, points, reference, markers, activeMarker, theme, exportContext, displaySettings, onMarkerChange, onActiveMarkerChange, onModeChange }: {
   mode: ViewMode;
   points: SweepPoint[];
   reference: SweepPoint[] | null;
@@ -263,6 +274,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
   activeMarker: number;
   theme: 'light' | 'dark';
   exportContext: PlotExportContext;
+  displaySettings: DisplaySettings;
   onMarkerChange: (marker: number, index: number) => void;
   onActiveMarkerChange: (marker: number) => void;
   onModeChange: (mode: ViewMode) => void;
@@ -313,15 +325,24 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
 
     const line = (values: Array<{ x: number; y: number }>, color: string) => {
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1.45;
-      ctx.beginPath();
-      let drawing = false;
-      values.forEach((point) => {
-        if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) { drawing = false; return; }
-        if (drawing) ctx.lineTo(point.x, point.y);
-        else { ctx.moveTo(point.x, point.y); drawing = true; }
-      });
-      ctx.stroke();
+      ctx.lineWidth = displaySettings.lineWidth;
+      if (displaySettings.connectPoints) {
+        ctx.beginPath();
+        let drawing = false;
+        values.forEach((point) => {
+          if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) { drawing = false; return; }
+          if (drawing) ctx.lineTo(point.x, point.y);
+          else { ctx.moveTo(point.x, point.y); drawing = true; }
+        });
+        ctx.stroke();
+      }
+      if (displaySettings.pointSize > 0) {
+        ctx.fillStyle = color;
+        values.forEach((point) => {
+          if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+          ctx.beginPath(); ctx.arc(point.x, point.y, displaySettings.pointSize, 0, Math.PI * 2); ctx.fill();
+        });
+      }
     };
 
     if (mode === 'smith' || mode === 's21-polar') {
@@ -360,7 +381,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
         const referencePositions = reference.map((point) => ({ x: cx + point[channel].re * radius, y: cy - point[channel].im * radius }));
         ctx.setLineDash([4, 3]); line(referencePositions, dark ? '#b0b0aa' : '#777777'); ctx.setLineDash([]);
       }
-      line(positions, mode === 'smith' ? TRACE.magenta : TRACE.yellow);
+      line(positions, mode === 'smith' ? displaySettings.colors.magenta : displaySettings.colors.yellow);
       pointPositionsRef.current = positions;
       return;
     }
@@ -369,35 +390,52 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
     let max = 0;
     let series: Array<{ values: number[]; color: string; label: string; unit: string }> = [];
     if (mode === 'return-loss') series = [
-      { values: points.map((point) => db(point.s11)), color: TRACE.magenta, label: 'S11', unit: 'dB' },
-      { values: points.map((point) => db(point.s21)), color: TRACE.yellow, label: 'S21', unit: 'dB' },
+      { values: points.map((point) => db(point.s11)), color: displaySettings.colors.magenta, label: 'S11', unit: 'dB' },
+      { values: points.map((point) => db(point.s21)), color: displaySettings.colors.yellow, label: 'S21', unit: 'dB' },
     ];
-    if (mode === 's21-gain') series = [{ values: points.map((point) => db(point.s21)), color: TRACE.yellow, label: 'S21', unit: 'dB' }];
+    if (mode === 's21-gain') series = [{ values: points.map((point) => db(point.s21)), color: displaySettings.colors.yellow, label: 'S21', unit: 'dB' }];
+    if (mode === 's21-magnitude') { const values = points.map((point) => magnitude(point.s21)); min = 0; max = Math.max(1, ...values.filter(Number.isFinite)); series = [{ values, color: displaySettings.colors.yellow, label: '|S21|', unit: 'ratio' }]; }
     if (mode === 'phase') { min = -180; max = 180; series = [
-      { values: points.map((point) => phase(point.s11)), color: TRACE.magenta, label: 'S11', unit: '°' },
-      { values: points.map((point) => phase(point.s21)), color: TRACE.yellow, label: 'S21', unit: '°' },
+      { values: points.map((point) => phase(point.s11)), color: displaySettings.colors.magenta, label: 'S11', unit: '°' },
+      { values: points.map((point) => phase(point.s21)), color: displaySettings.colors.yellow, label: 'S21', unit: '°' },
     ]; }
-    if (mode === 'vswr') { const values = points.map((point) => vswr(point.s11)).map((value) => Number.isFinite(value) ? value : Number.NaN); min = 1; max = Math.min(20, Math.max(3, ...values.filter(Number.isFinite))); series = [{ values, color: TRACE.blue, label: 'VSWR', unit: 'ratio' }]; }
+    if (mode === 'vswr') { const values = points.map((point) => vswr(point.s11)).map((value) => Number.isFinite(value) ? value : Number.NaN); min = 1; max = Math.min(20, Math.max(3, ...values.filter(Number.isFinite))); series = [{ values, color: displaySettings.colors.blue, label: 'VSWR', unit: 'ratio' }]; }
     if (mode === 'resistance-reactance') {
       const z = points.map((point) => impedance(point.s11));
       const extent = Math.max(100, ...z.flatMap((value) => [Math.abs(value.re), Math.abs(value.im)]).filter((value) => Number.isFinite(value)));
       min = -extent; max = extent;
-      series = [{ values: z.map((value) => value.re), color: TRACE.cyan, label: 'R', unit: 'Ω' }, { values: z.map((value) => value.im), color: TRACE.red, label: 'X', unit: 'Ω' }];
+      series = [{ values: z.map((value) => value.re), color: displaySettings.colors.cyan, label: 'R', unit: 'Ω' }, { values: z.map((value) => value.im), color: displaySettings.colors.red, label: 'X', unit: 'Ω' }];
     }
     if (mode === 'admittance') {
       const y = points.map((point) => admittance(point.s11));
       const extent = Math.max(20, ...y.flatMap((value) => [Math.abs(value.re * 1000), Math.abs(value.im * 1000)]).filter((value) => Number.isFinite(value)));
       min = -extent; max = extent;
-      series = [{ values: y.map((value) => value.re * 1000), color: TRACE.green, label: 'G', unit: 'mS' }, { values: y.map((value) => value.im * 1000), color: TRACE.red, label: 'B', unit: 'mS' }];
+      series = [{ values: y.map((value) => value.re * 1000), color: displaySettings.colors.green, label: 'G', unit: 'mS' }, { values: y.map((value) => value.im * 1000), color: displaySettings.colors.red, label: 'B', unit: 'mS' }];
     }
-    if (mode === 's11-magnitude') { min = 0; max = Math.max(1, ...points.map((point) => magnitude(point.s11))); series = [{ values: points.map((point) => magnitude(point.s11)), color: TRACE.magenta, label: '|Γ|', unit: 'ratio' }]; }
-    if (mode === 's11-z-magnitude') { const values = points.map((point) => magnitude(impedance(point.s11))); min = 0; max = Math.max(100, ...values.filter(Number.isFinite)); series = [{ values, color: TRACE.cyan, label: '|Z|', unit: 'Ω' }]; }
-    if (mode === 's11-components' || mode === 's21-components') { const channel = mode === 's11-components' ? 's11' : 's21'; min = -1; max = 1; series = [{ values: points.map((point) => point[channel].re), color: TRACE.cyan, label: 'Real', unit: 'ratio' }, { values: points.map((point) => point[channel].im), color: TRACE.red, label: 'Imag', unit: 'ratio' }]; }
-    if (mode === 's11-group-delay' || mode === 's21-group-delay') { const channel = mode === 's11-group-delay' ? 's11' : 's21'; const values = groupDelay(points, channel); const extent = Math.max(1, ...values.map(Math.abs).filter(Number.isFinite)); min = -extent; max = extent; series = [{ values, color: channel === 's11' ? TRACE.magenta : TRACE.yellow, label: 'Delay', unit: 'ns' }]; }
-    if (mode === 'q-factor') { const values = points.map((point) => { const z = impedance(point.s11); return z.re === 0 ? Number.NaN : Math.abs(z.im / z.re); }); min = 0; max = Math.max(5, ...values.filter(Number.isFinite)); series = [{ values, color: TRACE.blue, label: 'Q', unit: 'ratio' }]; }
-    if (mode === 'capacitance') { const values = points.map((point) => { const x = impedance(point.s11).im; return x < 0 ? -1 / (2 * Math.PI * point.frequency * x) * 1e12 : Number.NaN; }); min = 0; max = Math.max(100, ...values.filter(Number.isFinite)); series = [{ values, color: TRACE.green, label: 'C', unit: 'pF' }]; }
-    if (mode === 'inductance') { const values = points.map((point) => { const x = impedance(point.s11).im; return x > 0 ? x / (2 * Math.PI * point.frequency) * 1e9 : Number.NaN; }); min = 0; max = Math.max(100, ...values.filter(Number.isFinite)); series = [{ values, color: TRACE.yellow, label: 'L', unit: 'nH' }]; }
-    if (mode === 's21-series-z' || mode === 's21-shunt-z') { const z = points.map((point) => s21Impedance(point.s21, mode === 's21-shunt-z')); const extent = Math.max(100, ...z.flatMap((value) => [Math.abs(value.re), Math.abs(value.im)]).filter(Number.isFinite)); min = -extent; max = extent; series = [{ values: z.map((value) => value.re), color: TRACE.cyan, label: 'R', unit: 'Ω' }, { values: z.map((value) => value.im), color: TRACE.red, label: 'X', unit: 'Ω' }]; }
+    if (mode === 's11-magnitude') { min = 0; max = Math.max(1, ...points.map((point) => magnitude(point.s11))); series = [{ values: points.map((point) => magnitude(point.s11)), color: displaySettings.colors.magenta, label: '|Γ|', unit: 'ratio' }]; }
+    if (mode === 's11-z-magnitude') { const values = points.map((point) => magnitude(impedance(point.s11))); min = 0; max = Math.max(100, ...values.filter(Number.isFinite)); series = [{ values, color: displaySettings.colors.cyan, label: '|Z|', unit: 'Ω' }]; }
+    if (mode === 's11-components' || mode === 's21-components') { const channel = mode === 's11-components' ? 's11' : 's21'; min = -1; max = 1; series = [{ values: points.map((point) => point[channel].re), color: displaySettings.colors.cyan, label: 'Real', unit: 'ratio' }, { values: points.map((point) => point[channel].im), color: displaySettings.colors.red, label: 'Imag', unit: 'ratio' }]; }
+    if (mode === 's11-group-delay' || mode === 's21-group-delay') { const channel = mode === 's11-group-delay' ? 's11' : 's21'; const values = groupDelay(points, channel); const extent = Math.max(1, ...values.map(Math.abs).filter(Number.isFinite)); min = -extent; max = extent; series = [{ values, color: channel === 's11' ? displaySettings.colors.magenta : displaySettings.colors.yellow, label: 'Delay', unit: 'ns' }]; }
+    if (mode === 'q-factor') { const values = points.map((point) => { const z = impedance(point.s11); return z.re === 0 ? Number.NaN : Math.abs(z.im / z.re); }); min = 0; max = Math.max(5, ...values.filter(Number.isFinite)); series = [{ values, color: displaySettings.colors.blue, label: 'Q', unit: 'ratio' }]; }
+    if (mode === 'capacitance') { const values = points.map((point) => { const x = impedance(point.s11).im; return x < 0 ? -1 / (2 * Math.PI * point.frequency * x) * 1e12 : Number.NaN; }); min = 0; max = Math.max(100, ...values.filter(Number.isFinite)); series = [{ values, color: displaySettings.colors.green, label: 'C', unit: 'pF' }]; }
+    if (mode === 'inductance') { const values = points.map((point) => { const x = impedance(point.s11).im; return x > 0 ? x / (2 * Math.PI * point.frequency) * 1e9 : Number.NaN; }); min = 0; max = Math.max(100, ...values.filter(Number.isFinite)); series = [{ values, color: displaySettings.colors.yellow, label: 'L', unit: 'nH' }]; }
+    if (mode === 's21-series-z' || mode === 's21-shunt-z') { const z = points.map((point) => s21Impedance(point.s21, mode === 's21-shunt-z')); const extent = Math.max(100, ...z.flatMap((value) => [Math.abs(value.re), Math.abs(value.im)]).filter(Number.isFinite)); min = -extent; max = extent; series = [{ values: z.map((value) => value.re), color: displaySettings.colors.cyan, label: 'R', unit: 'Ω' }, { values: z.map((value) => value.im), color: displaySettings.colors.red, label: 'X', unit: 'Ω' }]; }
+
+    if (displaySettings.showBands) {
+      const sweepStart = points[0].frequency;
+      const sweepStop = points.at(-1)!.frequency;
+      displaySettings.bands.forEach((band) => {
+        const start = Math.max(sweepStart, Math.min(band.start, band.stop));
+        const stop = Math.min(sweepStop, Math.max(band.start, band.stop));
+        if (stop <= start) return;
+        const x = area.x + area.w * (start - sweepStart) / Math.max(1, sweepStop - sweepStart);
+        const bandWidth = area.w * (stop - start) / Math.max(1, sweepStop - sweepStart);
+        ctx.fillStyle = `${band.color}2b`;
+        ctx.fillRect(x, area.y, bandWidth, area.h);
+        ctx.fillStyle = canvasText;
+        ctx.fillText(band.name, x + 3, area.y + 11);
+      });
+    }
 
     ctx.strokeStyle = canvasGrid;
     ctx.fillStyle = canvasText;
@@ -412,6 +450,16 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
       ctx.beginPath(); ctx.moveTo(x, area.y); ctx.lineTo(x, area.y + area.h); ctx.stroke();
       const frequency = points[0].frequency + (points.at(-1)!.frequency - points[0].frequency) * i / 5;
       ctx.fillText(formatAxisFrequency(frequency), Math.min(width - 58, x - 18), height - 8);
+    }
+    if (mode === 'vswr' && displaySettings.showVswrLines) {
+      ctx.save(); ctx.setLineDash([5, 3]); ctx.strokeStyle = dark ? '#a4a59f' : '#686963'; ctx.fillStyle = canvasText;
+      displaySettings.vswrLines.forEach((limit) => {
+        if (limit <= min || limit >= max) return;
+        const y = area.y + area.h * (max - limit) / (max - min);
+        ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
+        ctx.fillText(`${limit}:1`, area.x + 3, y - 2);
+      });
+      ctx.restore();
     }
     const positionsBySeries = series.map(({ values, color }) => {
       const positions = values.map((value, index) => ({
@@ -437,7 +485,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
       ctx.fillStyle = dark ? '#deded9' : '#222';
       ctx.fillText(`${item.label} (${item.unit})`, area.x + 16 + index * 86, 6);
     });
-  }, [mode, points, reference, resizeVersion, theme]);
+  }, [displaySettings, mode, points, reference, resizeVersion, theme]);
 
   useEffect(() => {
     const base = canvasRef.current;
@@ -453,9 +501,9 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
     const dark = theme === 'dark';
     markers.forEach((marker, index) => {
       const position = pointPositionsRef.current[marker.index];
-      if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) drawCanvasMarker(ctx, position, marker.color, index, dark, activeMarker === index);
+      if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) drawCanvasMarker(ctx, position, marker.color, index, dark, activeMarker === index, displaySettings);
     });
-  }, [activeMarker, markers, mode, points, resizeVersion, theme]);
+  }, [activeMarker, displaySettings, markers, mode, points, resizeVersion, theme]);
 
   function moveMarkerToPointer(marker: number, clientX: number, clientY: number) {
     const canvas = canvasRef.current;
@@ -639,10 +687,13 @@ export default function App() {
   const [segments, setSegments] = useState(10);
   const [averages, setAverages] = useState(1);
   const [truncateCount, setTruncateCount] = useState(0);
+  const [logarithmicSweep, setLogarithmicSweep] = useState(false);
   const [connected, setConnected] = useState(false);
   const [firmware, setFirmware] = useState('No device');
   const [calibrationState, setCalibrationState] = useState('Unknown');
   const [capabilities, setCapabilities] = useState<NanoVNACapabilities>(EMPTY_CAPABILITIES);
+  const [bandwidthOptions, setBandwidthOptions] = useState<number[]>([]);
+  const [deviceBandwidth, setDeviceBandwidthState] = useState<number | null>(null);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [calibrationStarted, setCalibrationStarted] = useState(false);
   const [calibrationCompleted, setCalibrationCompleted] = useState<CalibrationStep[]>([]);
@@ -667,23 +718,33 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [tdrOpen, setTdrOpen] = useState(false);
+  const [displayOpen, setDisplayOpen] = useState(false);
   const [comparisonDatasets, setComparisonDatasets] = useState<ComparisonDataset[]>([]);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
   const [suggestedPane, setSuggestedPane] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+  const [displaySettings, setDisplaySettings] = useState<DisplaySettings>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('nanovna-display-settings') ?? '{}') as Partial<DisplaySettings>;
+      return { ...DEFAULT_DISPLAY_SETTINGS, ...saved, colors: { ...DEFAULT_DISPLAY_SETTINGS.colors, ...(saved.colors ?? {}) }, bands: Array.isArray(saved.bands) ? saved.bands : [] };
+    } catch { return DEFAULT_DISPLAY_SETTINGS; }
+  });
   const bw = useMemo(() => bandwidth(points), [points]);
   const plotSuggestions = useMemo(() => suggestPlots(points), [points]);
   const deltaReferencePoint = useMemo(() => {
     if (!reference?.length || !markers[0] || !points[markers[0].index]) return null;
-    const frequency = points[markers[0].index].frequency;
-    return reference.reduce((best, point) => Math.abs(point.frequency - frequency) < Math.abs(best.frequency - frequency) ? point : best, reference[0]);
+    return nearestPointByFrequency(reference, points[markers[0].index].frequency);
   }, [markers, points, reference]);
+  const processingLabel = sourceInfo.processing ?? 'original sample grid, no browser smoothing';
+  const samplesLabel = processingLabel.includes('complex mean') ? 'averaged points' : 'acquired points';
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('nanovna-theme', theme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1d1e20' : '#cfcfcd');
   }, [theme]);
+
+  useEffect(() => { localStorage.setItem('nanovna-display-settings', JSON.stringify(displaySettings)); }, [displaySettings]);
 
   useEffect(() => {
     pointsRef.current = points;
@@ -729,17 +790,18 @@ export default function App() {
   }, [busy, calibrationState, capabilities.currentData, connected, firmware, followDevice]);
 
   useEffect(() => {
-    if (!aboutOpen && !helpOpen && !calibrationOpen && !tdrOpen) return;
+    if (!aboutOpen && !helpOpen && !calibrationOpen && !tdrOpen && !displayOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       setAboutOpen(false);
       setHelpOpen(false);
       setTdrOpen(false);
+      setDisplayOpen(false);
       if (!busy) setCalibrationOpen(false);
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [aboutOpen, busy, calibrationOpen, helpOpen, tdrOpen]);
+  }, [aboutOpen, busy, calibrationOpen, displayOpen, helpOpen, tdrOpen]);
 
   function updateMarker(marker: number, index: number) {
     setMarkers((current) => current.map((item, candidate) => candidate === marker ? { ...item, index } : item));
@@ -806,6 +868,8 @@ export default function App() {
       setFirmware('No device');
       setCalibrationState('Unknown');
       setCapabilities(EMPTY_CAPABILITIES);
+      setBandwidthOptions([]);
+      setDeviceBandwidthState(null);
       setCalibrationOpen(false);
       setCalibrationStarted(false);
       setCalibrationCompleted([]);
@@ -830,7 +894,17 @@ export default function App() {
       setFollowStatus(connection.capabilities.currentData ? 'Starting…' : 'Current device-buffer commands not advertised');
       setCalibrationStarted(false);
       setCalibrationCompleted([]);
-      setMessage(`Connected at 115200 baud · ${version} · ${connection.capabilities.calibration ? 'device calibration controls available' : 'calibration commands not advertised'}.`);
+      let bandwidthDetail = '';
+      if (connection.capabilities.bandwidth) {
+        try {
+          const options = await connection.getBandwidths();
+          setBandwidthOptions(options);
+          bandwidthDetail = ` · bandwidth choices detected: ${options.map(formatFrequency).join(', ')}`;
+        } catch (error) {
+          bandwidthDetail = ` · bandwidth query failed: ${(error as Error).message}`;
+        }
+      }
+      setMessage(`Connected at 115200 baud · ${version} · ${connection.capabilities.calibration ? 'device calibration controls available' : 'calibration commands not advertised'}${bandwidthDetail}.`);
     } catch (error) { setMessage(`Connection failed: ${(error as Error).message}`); }
     finally { setBusy(false); }
   }
@@ -842,7 +916,8 @@ export default function App() {
     setBusy(true); setProgress(0); stopRequestedRef.current = false;
     let retainedPartial: SweepPoint[] = [];
     let retainedSegments = 0;
-    const processing = averages > 1 ? `${averages}-measurement complex mean${truncateCount ? `, ${truncateCount} farthest sample${truncateCount === 1 ? '' : 's'} discarded per frequency` : ''}; no smoothing` : 'original sample grid, no browser smoothing';
+    const averagingProcessing = averages > 1 ? `${averages}-measurement complex mean${truncateCount ? `, ${truncateCount} farthest sample${truncateCount === 1 ? '' : 's'} discarded per frequency` : ''}` : 'unaveraged complex samples';
+    const processing = `${averagingProcessing}; ${logarithmicSweep ? 'logarithmic segment spacing with shared boundaries retained once' : 'linear segment spacing'}; no smoothing`;
     const sweepLabel = averages > 1 ? `${firmware} averaged live sweep (${averages}/${truncateCount})` : `${firmware} live sweep`;
     try {
       do {
@@ -850,7 +925,7 @@ export default function App() {
         retainedSegments = 0;
         setProgress(0);
         const calibrationAtAcquisition = calibrationState;
-        const result = await connectionRef.current.sweep(parseFrequency(start), parseFrequency(stop), pointCount, segments, averages, truncateCount, (update) => {
+        const result = await connectionRef.current.sweep(parseFrequency(start), parseFrequency(stop), pointCount, segments, averages, truncateCount, logarithmicSweep, (update) => {
           retainedPartial = update.points;
           retainedSegments = update.completedSegments;
           setProgress(update.progress);
@@ -958,6 +1033,19 @@ export default function App() {
     finally { setBusy(false); if (resumeFollow) setFollowDevice(true); }
   }
 
+  async function changeDeviceBandwidth(value: number) {
+    if (!connectionRef.current || !connected) return;
+    const resumeFollow = followDevice;
+    setFollowDevice(false);
+    setBusy(true);
+    try {
+      await connectionRef.current.setBandwidth(value);
+      setDeviceBandwidthState(value);
+      setMessage(`Device measurement bandwidth set to ${formatFrequency(value)}. Narrower bandwidth generally lowers noise but increases acquisition time.`);
+    } catch (error) { setMessage(`Could not set device bandwidth: ${(error as Error).message}`); }
+    finally { setBusy(false); if (resumeFollow) setFollowDevice(true); }
+  }
+
   async function saveCalibrationSlot() {
     if (!connectionRef.current || !window.confirm(`Overwrite NanoVNA calibration slot ${calibrationSlot}?`)) return;
     const resumeFollow = followDevice;
@@ -985,7 +1073,13 @@ export default function App() {
   }
 
   function exportCsv() {
-    const rows = ['frequency_hz,s11_real,s11_imag,s11_db,s11_phase_deg,s21_real,s21_imag,s21_db,s21_phase_deg'];
+    const rows = [
+      `# Source: ${sourceInfo.sourceName.replace(/[\r\n]/g, ' ')}`,
+      `# Processing: ${processingLabel}`,
+      `# Device: ${sourceInfo.device.replace(/[\r\n]/g, ' ')}`,
+      `# Calibration: ${sourceInfo.calibration.replace(/[\r\n]/g, ' ')}`,
+      'frequency_hz,s11_real,s11_imag,s11_db,s11_phase_deg,s21_real,s21_imag,s21_db,s21_phase_deg',
+    ];
     points.forEach((point) => rows.push([point.frequency, point.s11.re, point.s11.im, db(point.s11), phase(point.s11), point.s21.re, point.s21.im, db(point.s21), phase(point.s21)].join(',')));
     downloadBlob(new Blob([rows.join('\n')], { type: 'text/csv' }), `nanovna-sweep-${Date.now()}.csv`);
   }
@@ -1026,12 +1120,13 @@ export default function App() {
 
   return (
     <main className="application">
-      <div className="window-title"><span>NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} raw points</span><div className="window-actions"><button onClick={() => setHelpOpen(true)}>Help</button><button className="theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} mode`}>{theme === 'light' ? 'Dark' : 'Light'}</button></div></div>
+      <div className="window-title"><span>NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} {samplesLabel}</span><div className="window-actions"><button onClick={() => setDisplayOpen(true)}>Display</button><button onClick={() => setHelpOpen(true)}>Help</button><button className="theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} mode`}>{theme === 'light' ? 'Dark' : 'Light'}</button></div></div>
       <div className="main-grid">
         <aside className="controls-column">
           <fieldset><legend>Sweep control</legend>
             <div className="form-grid"><label>Start</label><input value={start} onChange={(e) => setStart(e.target.value)} /><label>Stop</label><input value={stop} onChange={(e) => setStop(e.target.value)} /><label>Points / segment</label><select value={pointCount} onChange={(e) => setPointCount(Number(e.target.value))}>{[11, 51, 101, 201, 301, 401, 801].map((value) => <option key={value}>{value}</option>)}</select><label>Segments</label><input type="number" min="1" max="100" value={segments} onChange={(e) => setSegments(Number(e.target.value))} /></div>
             <label className="check-row"><input type="checkbox" checked={continuous} onChange={(e) => setContinuous(e.target.checked)} /> Continuous sweep</label>
+            <label className="check-row"><input type="checkbox" checked={logarithmicSweep} onChange={(event) => setLogarithmicSweep(event.target.checked)} /> Logarithmic segment spacing</label>
             <details className="sweep-processing"><summary>Averaging</summary><div className="form-grid"><label>Measurements</label><input type="number" min="1" max="99" value={averages} onChange={(event) => { const value = Math.max(1, Math.min(99, Math.round(Number(event.target.value) || 1))); setAverages(value); setTruncateCount((current) => Math.min(current, value - 1)); }} /><label>Discard outliers</label><input type="number" min="0" max={Math.max(0, averages - 1)} value={truncateCount} onChange={(event) => setTruncateCount(Math.max(0, Math.min(averages - 1, Math.round(Number(event.target.value) || 0))))} /></div><small>Averaging is OFF at 1. Higher values alter the data and are labeled in plot exports.</small></details>
             <div className="progress"><i style={{ width: `${progress * 100}%` }} /></div>
             <div className="sweep-buttons"><button onClick={runSweep} disabled={busy || !connected}>Sweep</button><button onClick={stopSweep} disabled={!busy}>Stop</button></div>
@@ -1050,7 +1145,7 @@ export default function App() {
             <small>Drag a marker on any plot, or enter its frequency.</small>
           </fieldset>
           <fieldset><legend>Measurement summary</legend>
-            <div className="summary"><span>Samples:</span><b>{points.length} points</b><span>Frequency step:</span><b>{formatFrequency((points.at(-1)!.frequency - points[0].frequency) / Math.max(1, points.length - 1))}</b><span>−10 dB bandwidth:</span><b>{bw === null ? 'Not found' : formatFrequency(bw)}</b><span>Browser smoothing:</span><b>OFF</b><span>Device calibration:</span><b title={calibrationState}>{calibrationState}</b></div>
+            <div className="summary"><span>Samples:</span><b>{points.length} {samplesLabel}</b><span>Frequency step:</span><b>{formatFrequency((points.at(-1)!.frequency - points[0].frequency) / Math.max(1, points.length - 1))}</b><span>−10 dB bandwidth:</span><b>{bw === null ? 'Not found' : formatFrequency(bw)}</b><span>Browser smoothing:</span><b>OFF</b><span>Processing:</span><b title={processingLabel}>{processingLabel}</b><span>Device calibration:</span><b title={calibrationState}>{calibrationState}</b></div>
             <button className="wide" onClick={() => setTdrOpen(true)}>Time Domain Reflectometry…</button>
           </fieldset>
           <fieldset><legend>Reference sweep</legend><button className="wide" onClick={() => setReference(points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })))}>Set current as reference</button><button className="wide" onClick={() => setReference(null)} disabled={!reference}>Clear reference</button><small>{reference ? `${reference.length} reference points · dashed gray trace` : 'No reference trace loaded'}</small></fieldset>
@@ -1059,6 +1154,15 @@ export default function App() {
             <label className="check-row"><input type="checkbox" checked={followDevice} onChange={(event) => { setFollowDevice(event.target.checked); setFollowStatus(event.target.checked ? 'Starting…' : 'Inactive'); }} disabled={!connected || busy || !capabilities.currentData} /> Follow current device buffers</label>
             <small className={followStatus.startsWith('Stale') ? 'stale-status' : ''}>{followStatus}</small>
             <button className="wide" onClick={toggleConnection} disabled={busy}>{connected ? 'Disconnect' : 'Connect to NanoVNA'}</button>
+          </fieldset>
+          <fieldset><legend>Device settings</legend>
+            <label className="device-select">Measurement bandwidth
+              <select value={deviceBandwidth ?? ''} onChange={(event) => void changeDeviceBandwidth(Number(event.target.value))} disabled={!connected || busy || !capabilities.bandwidth || bandwidthOptions.length === 0}>
+                <option value="">Select…</option>
+                {bandwidthOptions.map((value) => <option key={value} value={value}>{formatFrequency(value)}</option>)}
+              </select>
+            </label>
+            <small>{!connected ? 'Connect a device to detect supported settings.' : !capabilities.bandwidth ? 'This firmware did not advertise bandwidth control.' : bandwidthOptions.length ? `Supported choices: ${bandwidthOptions.map(formatFrequency).join(', ')}.` : 'The firmware advertised bandwidth control but did not return usable choices.'}</small>
           </fieldset>
           <fieldset><legend>Device calibration</legend>
             <div className="calibration-state"><span>Status</span><b title={calibrationState}>{calibrationState}</b></div>
@@ -1071,10 +1175,10 @@ export default function App() {
         </aside>
 
         <section className="readouts-column">
-          <AnalysisPanel points={points} live={connected && followDevice && !followStatus.startsWith('Stale')} onMoveMarkers={placeMarkers} />
+          <AnalysisPanel points={points} live={connected && followDevice && !followStatus.startsWith('Stale')} processing={processingLabel} onMoveMarkers={placeMarkers} />
           {markers.map((marker, index) => <MarkerReadout key={marker.id} point={points[marker.index]} number={index + 1} />)}
           {deltaMarker && markers[0] && (deltaReference ? deltaReferencePoint : markers[1] && points[markers[1].index]) && <DeltaMarkerReadout first={points[markers[0].index]} second={deltaReference ? deltaReferencePoint! : points[markers[1].index]} referenceMode={deltaReference} />}
-          <fieldset><legend>Trace colors</legend><div className="trace-key"><span style={{ color: TRACE.magenta }}>━ S11</span><span style={{ color: TRACE.yellow }}>━ S21</span><span style={{ color: TRACE.cyan }}>━ Resistance / conductance</span><span style={{ color: TRACE.red }}>━ Reactance / susceptance</span></div></fieldset>
+          <fieldset><legend>Trace colors</legend><div className="trace-key"><span style={{ color: displaySettings.colors.magenta }}>━ S11</span><span style={{ color: displaySettings.colors.yellow }}>━ S21</span><span style={{ color: displaySettings.colors.cyan }}>━ Resistance / conductance</span><span style={{ color: displaySettings.colors.red }}>━ Reactance / susceptance</span></div><button className="wide" onClick={() => setDisplayOpen(true)}>Display settings…</button></fieldset>
           <details className="analysis-guide">
             <summary>Suggested views</summary>
             <div className="analysis-guide-content">
@@ -1093,7 +1197,7 @@ export default function App() {
         </section>
 
         <section className="charts-grid">
-          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} exportContext={sourceInfo} onMarkerChange={updateMarker} onActiveMarkerChange={setActiveMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
+          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} exportContext={sourceInfo} displaySettings={displaySettings} onMarkerChange={updateMarker} onActiveMarkerChange={setActiveMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
         </section>
       </div>
       <div className="statusbar"><span>{message}</span><span className="status-actions"><a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a><button onClick={() => setAboutOpen(true)}>About</button></span></div>
@@ -1143,6 +1247,7 @@ export default function App() {
       </div>}
       <ComparisonMode open={comparisonOpen} onClose={() => setComparisonOpen(false)} datasets={comparisonDatasets} setDatasets={setComparisonDatasets} theme={theme} />
       {tdrOpen && <TdrPanel points={points} sourceName={sourceInfo.sourceName} onClose={() => setTdrOpen(false)} />}
+      {displayOpen && <DisplaySettingsPanel settings={displaySettings} onChange={setDisplaySettings} onClose={() => setDisplayOpen(false)} />}
     </main>
   );
 }

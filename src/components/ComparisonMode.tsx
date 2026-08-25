@@ -492,7 +492,7 @@ export function ComparisonMode({ open, onClose, datasets, setDatasets, theme }: 
             <span title={dataset.name}>{dataset.name}</span>
             <button onClick={() => setDatasets((current) => current.filter((item) => item.id !== dataset.id))} aria-label={`Remove ${dataset.name}`}>−</button>
           </div>)}
-          <div className="comparison-dropzone" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>Drop S1P, S2P, or raw CSV files here</div>
+          <div className="comparison-dropzone" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>Drop S1P, S2P, or complex CSV files here</div>
           {error && <p className="comparison-error">{error}</p>}
           {visible.length > 1 && <div className="comparison-span"><b>Common frequency span</b><span>{commonSpan ? `${formatFrequency(commonSpan.start)} – ${formatFrequency(commonSpan.stop)}` : 'No overlap'}</span></div>}
           {markers.length > 0 && <div className="comparison-markers"><div className="comparison-sidebar-title">Markers</div>

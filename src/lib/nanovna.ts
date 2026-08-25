@@ -48,6 +48,15 @@ export interface SweepResult extends SweepUpdate {
   complete: boolean;
 }
 
+const DISLORD_BANDWIDTH_CODES: Record<number, number> = { 10: 363, 33: 117, 50: 78, 100: 39, 200: 19, 250: 15, 333: 11, 500: 7, 1000: 3, 2000: 1, 4000: 0 };
+
+export function parseBandwidthResponse(lines: string[]): { options: number[]; method: 'direct' | 'dislord' | null } {
+  const response = lines.join(' ');
+  if (/Hz\)/i.test(response)) return { options: Object.keys(DISLORD_BANDWIDTH_CODES).map(Number), method: 'dislord' };
+  const choices = response.match(/\{([^}]+)\}/)?.[1]?.split('|').map((value) => Number(value.trim())).filter((value) => Number.isFinite(value) && value > 0) ?? [];
+  return choices.length ? { options: [...new Set(choices)].sort((a, b) => a - b), method: 'direct' } : { options: [], method: null };
+}
+
 function parseComplex(line: string): Complex | null {
   const values = line.trim().split(/\s+/).map(Number);
   if (values.length < 2 || values.some((value) => !Number.isFinite(value))) return null;
@@ -68,7 +77,14 @@ export function atLeastVersion(version: string, expected: [number, number, numbe
   return true;
 }
 
-export function segmentRanges(start: number, stop: number, points: number, segments: number): Array<{ start: number; stop: number }> {
+export function segmentRanges(start: number, stop: number, points: number, segments: number, logarithmic = false): Array<{ start: number; stop: number }> {
+  if (logarithmic) {
+    if (!(start > 0) || !(stop > start)) throw new Error('Logarithmic sweeps require a positive start frequency below the stop frequency.');
+    const ratio = stop / start;
+    const ranges = Array.from({ length: segments }, (_, index) => ({ start: Math.round(start * ratio ** (index / segments)), stop: Math.round(start * ratio ** ((index + 1) / segments)) }));
+    if (ranges.some((range, index) => range.stop <= range.start || (index > 0 && range.stop <= ranges[index - 1].stop))) throw new Error('The requested logarithmic span is too narrow for this many segments after whole-hertz rounding.');
+    return ranges;
+  }
   const step = Math.round((stop - start) / (points * segments - 1));
   return Array.from({ length: segments }, (_, index) => {
     const segmentStart = start + index * points * step;
@@ -131,6 +147,7 @@ export class NanoVNAConnection {
   private encoder = new TextEncoder();
   private operationQueue: Promise<void> = Promise.resolve();
   private closing = false;
+  private bandwidthMethod: 'direct' | 'dislord' | null = null;
   version = 'Unknown firmware';
   calibration = 'Unknown';
   supportsScan = false;
@@ -188,12 +205,12 @@ export class NanoVNAConnection {
     this.port = null;
   }
 
-  async sweep(start: number, stop: number, points: number, segments = 1, averages = 1, truncateCount = 0, onSegment?: (update: SweepUpdate) => void, isCancelled?: () => boolean): Promise<SweepResult> {
+  async sweep(start: number, stop: number, points: number, segments = 1, averages = 1, truncateCount = 0, logarithmic = false, onSegment?: (update: SweepUpdate) => void, isCancelled?: () => boolean): Promise<SweepResult> {
     return this.runExclusive(async () => {
       if (!Number.isInteger(averages) || averages < 1 || averages > 99) throw new Error('Averages must be an integer from 1 through 99.');
       if (!Number.isInteger(truncateCount) || truncateCount < 0 || truncateCount >= averages) throw new Error('Truncated-average discard count must be smaller than the number of averages.');
       const result: SweepPoint[] = [];
-      const ranges = segmentRanges(start, stop, points, segments);
+      const ranges = segmentRanges(start, stop, points, segments, logarithmic);
       let completedSegments = 0;
       for (let segment = 0; segment < ranges.length; segment += 1) {
         if (isCancelled?.()) break;
@@ -203,7 +220,9 @@ export class NanoVNAConnection {
           measurements.push(await this.readSegment(ranges[segment].start, ranges[segment].stop, points));
         }
         if (measurements.length !== averages) break;
-        result.push(...averageSweepSets(measurements, truncateCount));
+        const averaged = averageSweepSets(measurements, truncateCount);
+        if (logarithmic && result.length && averaged[0]?.frequency === result.at(-1)?.frequency) averaged.shift();
+        result.push(...averaged);
         completedSegments = segment + 1;
         onSegment?.({ points: result.slice(), completedSegments, totalSegments: segments, progress: completedSegments / segments });
       }
@@ -276,6 +295,27 @@ export class NanoVNAConnection {
       const id = validateCalibrationSlot(slot);
       this.assertAccepted(`recall ${id}`, await this.command(`recall ${id}`, 15000));
       return this.refreshCalibrationRaw();
+    });
+  }
+
+  async getBandwidths(): Promise<number[]> {
+    return this.runExclusive(async () => {
+      this.requireCapability('bandwidth', 'Device bandwidth control');
+      const parsed = parseBandwidthResponse(await this.command('bandwidth'));
+      this.bandwidthMethod = parsed.method;
+      return parsed.options;
+    });
+  }
+
+  async setBandwidth(bandwidth: number): Promise<void> {
+    return this.runExclusive(async () => {
+      this.requireCapability('bandwidth', 'Device bandwidth control');
+      if (!Number.isInteger(bandwidth) || bandwidth <= 0) throw new Error('Bandwidth must be a positive integer in hertz.');
+      if (!this.bandwidthMethod) this.bandwidthMethod = parseBandwidthResponse(await this.command('bandwidth')).method;
+      if (!this.bandwidthMethod) throw new Error('The firmware did not report a recognized list of supported bandwidths.');
+      const commandValue = this.bandwidthMethod === 'dislord' ? DISLORD_BANDWIDTH_CODES[bandwidth] : bandwidth;
+      if (commandValue === undefined) throw new Error(`Bandwidth ${bandwidth} Hz is not supported by this firmware family.`);
+      this.assertAccepted(`bandwidth ${commandValue}`, await this.command(`bandwidth ${commandValue}`));
     });
   }
 

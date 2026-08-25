@@ -27,8 +27,9 @@ export function parseMeasurementFile(text: string, filename: string): SweepPoint
 
 function parseCsv(text: string): SweepPoint[] {
   const lines = text.split(/\r?\n/).filter(Boolean);
-  if (!lines[0]?.toLowerCase().startsWith('frequency_hz,')) throw new Error('CSV must use the NanoVNA Web raw export columns.');
-  const rows = lines.slice(1).map((line) => line.split(',').map(Number));
+  const header = lines.findIndex((line) => line.toLowerCase().startsWith('frequency_hz,'));
+  if (header < 0) throw new Error('CSV must use the NanoVNA Web complex export columns.');
+  const rows = lines.slice(header + 1).filter((line) => !line.startsWith('#')).map((line) => line.split(',').map(Number));
   if (rows.some((row) => row.length < 9 || !row.every(Number.isFinite))) throw new Error('CSV contains a malformed or incomplete measurement row.');
   const result = rows.map((row) => ({
     frequency: row[0],

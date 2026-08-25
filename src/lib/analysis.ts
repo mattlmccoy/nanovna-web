@@ -84,8 +84,16 @@ export function analyzePeak(points: SweepPoint[], options: AnalysisOptions = {})
   const direction = options.peakDirection ?? 'highest';
   const count = Math.max(1, Math.min(10, Math.round(options.peakCount ?? 3)));
   const { values, unit, label } = metricValues(points, metric);
+  const finiteIndices = values.map((value, index) => Number.isFinite(value) ? index : -1).filter((index) => index >= 0);
+  if (!finiteIndices.length) return {
+    title: 'Peak search',
+    summary: `${label} is unavailable in this dataset.`,
+    rows: [{ label, value: 'Unavailable' }],
+    markerIndices: [],
+    caution: 'No finite samples were available for the selected metric.',
+  };
   let indices = localExtrema(values, direction);
-  if (!indices.length && values.length) indices = [values.reduce((best, value, index) => direction === 'highest' ? (value > values[best] ? index : best) : (value < values[best] ? index : best), 0)];
+  if (!indices.length) indices = [finiteIndices.reduce((best, index) => direction === 'highest' ? (values[index] > values[best] ? index : best) : (values[index] < values[best] ? index : best))];
   indices.sort((a, b) => direction === 'highest' ? values[b] - values[a] : values[a] - values[b]);
   indices = indices.slice(0, count);
   return {
@@ -93,7 +101,7 @@ export function analyzePeak(points: SweepPoint[], options: AnalysisOptions = {})
     summary: `${indices.length} ${direction === 'highest' ? 'maximum' : 'minimum'} ${indices.length === 1 ? 'feature' : 'features'} in raw ${label}.`,
     rows: indices.map((index, rank) => ({ label: `${rank + 1}. ${formatFrequency(points[index].frequency)}`, value: `${formatNumber(values[index])} ${unit}`, index })),
     markerIndices: indices,
-    caution: 'Local extrema are detected on acquired samples without smoothing. Noise can therefore appear as a feature.',
+    caution: 'Local extrema are detected on acquired-grid samples without smoothing. Noise can therefore appear as a feature.',
   };
 }
 
@@ -122,7 +130,7 @@ export function analyzeVswr(points: SweepPoint[], limit = 1.5): AnalysisResult {
     summary: selected.length ? `${regions.length} region${regions.length === 1 ? '' : 's'} below ${formatNumber(limit, 2)}:1.` : `No acquired samples are below ${formatNumber(limit, 2)}:1.`,
     rows,
     markerIndices: selected.map((region) => region.minimum),
-    caution: 'Band edges are acquired samples. Increase point density when an edge location matters.',
+    caution: 'Band edges are acquired-grid samples. Increase point density when an edge location matters.',
   };
 }
 
@@ -148,41 +156,41 @@ export function analyzeResonance(points: SweepPoint[]): AnalysisResult {
   };
 }
 
-function rolloff(points: SweepPoint[], gains: number[], a: { frequency: number; index: number } | null, b: { frequency: number; index: number } | null): { octave: number; decade: number } | null {
+function rolloff(a: { frequency: number; index: number } | null, b: { frequency: number; index: number } | null, attenuationDb: number): { octave: number; decade: number } | null {
   if (!a || !b || a.frequency <= 0 || b.frequency <= 0 || a.frequency === b.frequency) return null;
-  const attenuation = Math.abs(gains[a.index] - gains[b.index]);
   const factor = Math.max(a.frequency, b.frequency) / Math.min(a.frequency, b.frequency);
   if (factor <= 1) return null;
-  const decade = attenuation / Math.log10(factor);
+  const decade = attenuationDb / Math.log10(factor);
   return { octave: decade * Math.log10(2), decade };
 }
 
 export function analyzeFilter(points: SweepPoint[], mode: 'low-pass' | 'high-pass' | 'band-pass' | 'band-stop'): AnalysisResult {
   const gains = points.map((point) => db(point.s21));
-  if (!gains.length) return { title: 'Filter analysis', summary: 'No S21 data.', rows: [], markerIndices: [] };
+  if (!gains.length || gains.some((value) => !Number.isFinite(value))) return { title: 'Filter analysis', summary: 'S21 is unavailable for this dataset.', rows: [], markerIndices: [], caution: 'Transmission analysis requires finite complex S21 at every acquired frequency.' };
   const isStop = mode === 'band-stop';
   const peakIndex = gains.reduce((best, value, index) => isStop ? (value < gains[best] ? index : best) : (value > gains[best] ? index : best), 0);
   const peakGain = gains[peakIndex];
-  const level3 = isStop ? peakGain + 3 : peakGain - 3;
-  const level6 = isStop ? peakGain + 6 : peakGain - 6;
-  const level10 = isStop ? peakGain + 10 : peakGain - 10;
-  const level20 = isStop ? peakGain + 20 : peakGain - 20;
+  const passbandBaseline = Math.max(...gains);
+  const level3 = isStop ? passbandBaseline - 3 : peakGain - 3;
+  const level10 = peakGain - 10;
+  const level20 = peakGain - 20;
   const left3 = (mode === 'high-pass' || mode === 'band-pass' || mode === 'band-stop') ? findCrossing(points, gains, peakIndex, -1, level3) : null;
   const right3 = (mode === 'low-pass' || mode === 'band-pass' || mode === 'band-stop') ? findCrossing(points, gains, peakIndex, 1, level3) : null;
   const primary3 = mode === 'high-pass' ? left3 : right3;
   const primary10 = mode === 'high-pass' ? findCrossing(points, gains, peakIndex, -1, level10) : findCrossing(points, gains, peakIndex, 1, level10);
   const primary20 = mode === 'high-pass' ? findCrossing(points, gains, peakIndex, -1, level20) : findCrossing(points, gains, peakIndex, 1, level20);
   const rows: AnalysisRow[] = [{ label: isStop ? 'Minimum transmission' : 'Passband peak', value: `${formatFrequency(points[peakIndex].frequency)} · ${formatNumber(peakGain)} dB`, index: peakIndex }];
+  if (isStop) rows.push({ label: 'Passband baseline', value: `${formatNumber(passbandBaseline)} dB` });
   const markerIndices = [peakIndex];
   if (left3) { rows.push({ label: 'Lower −3 dB edge', value: formatFrequency(left3.frequency), index: left3.index }); markerIndices.push(left3.index); }
   if (right3) { rows.push({ label: 'Upper −3 dB edge', value: formatFrequency(right3.frequency), index: right3.index }); markerIndices.push(right3.index); }
   if (left3 && right3) {
     const width = right3.frequency - left3.frequency;
-    rows.push({ label: isStop ? '−3 dB stop width' : '−3 dB bandwidth', value: formatFrequency(width) });
+    rows.push({ label: isStop ? 'Stop width below passband −3 dB' : '−3 dB bandwidth', value: formatFrequency(width) });
     if (!isStop && width > 0) rows.push({ label: 'Loaded Q estimate', value: formatNumber(points[peakIndex].frequency / width, 2) });
   }
   if (primary3 && mode !== 'band-pass' && mode !== 'band-stop') rows.push({ label: '−3 dB cutoff', value: formatFrequency(primary3.frequency), index: primary3.index });
-  const slope = rolloff(points, gains, primary10, primary20);
+  const slope = rolloff(primary10, primary20, 10);
   if (slope) rows.push({ label: '10–20 dB roll-off', value: `${formatNumber(slope.octave, 2)} dB/oct · ${formatNumber(slope.decade, 2)} dB/dec` });
   const missing = (mode === 'band-pass' || mode === 'band-stop') ? (!left3 || !right3) : !primary3;
   return {
@@ -190,7 +198,7 @@ export function analyzeFilter(points: SweepPoint[], mode: 'low-pass' | 'high-pas
     summary: missing ? 'The sweep does not contain every required −3 dB crossing.' : 'Required −3 dB crossing points were found.',
     rows,
     markerIndices: [...new Set(markerIndices)],
-    caution: 'Cutoff frequencies are linearly interpolated between adjacent raw samples; no smoothing or curve fitting is applied.',
+    caution: 'Cutoff frequencies are linearly interpolated between adjacent acquired-grid samples; no smoothing or curve fitting is applied.',
   };
 }
 
@@ -201,18 +209,21 @@ export function analyzeOverview(points: SweepPoint[]): AnalysisResult {
   const swr = points.map((point) => vswr(point.s11));
   const minS11 = s11.reduce((best, value, index) => value < s11[best] ? index : best, 0);
   const minVswr = swr.reduce((best, value, index) => value < swr[best] ? index : best, 0);
-  const maxS21 = s21.reduce((best, value, index) => value > s21[best] ? index : best, 0);
-  const minS21 = s21.reduce((best, value, index) => value < s21[best] ? index : best, 0);
+  const hasS21 = s21.every(Number.isFinite);
+  const maxS21 = hasS21 ? s21.reduce((best, value, index) => value > s21[best] ? index : best, 0) : -1;
+  const minS21 = hasS21 ? s21.reduce((best, value, index) => value < s21[best] ? index : best, 0) : -1;
   return {
     title: 'Sweep overview',
-    summary: `${points.length} raw samples from ${formatFrequency(points[0].frequency)} to ${formatFrequency(points.at(-1)!.frequency)}.`,
+    summary: `${points.length} acquired-grid samples from ${formatFrequency(points[0].frequency)} to ${formatFrequency(points.at(-1)!.frequency)}.`,
     rows: [
       { label: 'Best S11 match', value: `${formatFrequency(points[minS11].frequency)} · ${formatNumber(s11[minS11])} dB`, index: minS11 },
       { label: 'Minimum VSWR', value: `${formatFrequency(points[minVswr].frequency)} · ${formatNumber(swr[minVswr], 2)}:1`, index: minVswr },
-      { label: 'Maximum S21', value: `${formatFrequency(points[maxS21].frequency)} · ${formatNumber(s21[maxS21])} dB`, index: maxS21 },
-      { label: 'Minimum S21', value: `${formatFrequency(points[minS21].frequency)} · ${formatNumber(s21[minS21])} dB`, index: minS21 },
+      ...(hasS21 ? [
+        { label: 'Maximum S21', value: `${formatFrequency(points[maxS21].frequency)} · ${formatNumber(s21[maxS21])} dB`, index: maxS21 },
+        { label: 'Minimum S21', value: `${formatFrequency(points[minS21].frequency)} · ${formatNumber(s21[minS21])} dB`, index: minS21 },
+      ] : [{ label: 'S21', value: 'Unavailable in this dataset' }]),
     ],
-    markerIndices: [...new Set([minS11, minVswr, maxS21, minS21])],
+    markerIndices: [...new Set([minS11, minVswr, ...(hasS21 ? [maxS21, minS21] : [])])],
   };
 }
 

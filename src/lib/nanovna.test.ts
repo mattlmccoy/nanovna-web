@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assembleCurrentSweep, atLeastVersion, averageSweepSets, parseShellCommands, segmentRanges, validateCalibrationSlot } from './nanovna.ts';
+import { assembleCurrentSweep, atLeastVersion, averageSweepSets, parseBandwidthResponse, parseShellCommands, segmentRanges, validateCalibrationSlot } from './nanovna.ts';
 
 test('firmware comparison is lexicographic, not component-wise', () => {
   assert.equal(atLeastVersion('0.7.1', [0, 7, 1]), true);
@@ -23,12 +23,28 @@ test('segmented sweep matches NanoVNA Saver point and step semantics', () => {
   assert.equal(ranges[1].start - ranges[0].stop, 49554);
 });
 
+test('logarithmic segment endpoints follow equal ratios', () => {
+  const ranges = segmentRanges(1e6, 1e9, 101, 3, true);
+  assert.deepEqual(ranges, [{ start: 1e6, stop: 1e7 }, { start: 1e7, stop: 1e8 }, { start: 1e8, stop: 1e9 }]);
+  assert.throws(() => segmentRanges(0, 1e9, 101, 3, true), /positive start/);
+  assert.throws(() => segmentRanges(1, 2, 101, 10, true), /too narrow/);
+});
+
 test('shell capability parsing uses complete command tokens', () => {
   const commands = parseShellCommands(['Commands: scan cal save recall pause resume bandwidth']);
   assert.equal(commands.has('scan'), true);
   assert.equal(commands.has('cal'), true);
   assert.equal(commands.has('calibration'), false);
   assert.equal(commands.has('save'), true);
+});
+
+test('bandwidth responses distinguish direct hertz values from Dislord codes', () => {
+  assert.deepEqual(parseBandwidthResponse(['bandwidth {100|1000|4000}']), { options: [100, 1000, 4000], method: 'direct' });
+  const dislord = parseBandwidthResponse(['bandwidth 3 (1000 Hz)']);
+  assert.equal(dislord.method, 'dislord');
+  assert.equal(dislord.options.includes(10), true);
+  assert.equal(dislord.options.includes(4000), true);
+  assert.deepEqual(parseBandwidthResponse(['bandwidth']), { options: [], method: null });
 });
 
 test('calibration slots stay within the five-slot common firmware range', () => {

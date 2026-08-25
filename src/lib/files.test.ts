@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseMeasurementFile } from './files.ts';
 
-test('loads NanoVNA Web raw CSV without recalculating complex values', () => {
-  const csv = 'frequency_hz,s11_real,s11_imag,s11_db,s11_phase_deg,s21_real,s21_imag,s21_db,s21_phase_deg\n1000000,0.2,-0.1,0,0,0.8,0.3,0,0';
+test('loads NanoVNA Web complex CSV without recalculating complex values', () => {
+  const csv = '# Processing: 3-measurement complex mean\nfrequency_hz,s11_real,s11_imag,s11_db,s11_phase_deg,s21_real,s21_imag,s21_db,s21_phase_deg\n1000000,0.2,-0.1,0,0,0.8,0.3,0,0';
   const [point] = parseMeasurementFile(csv, 'sweep.csv');
   assert.deepEqual(point, { frequency: 1e6, s11: { re: 0.2, im: -0.1 }, s21: { re: 0.8, im: 0.3 } });
 });
