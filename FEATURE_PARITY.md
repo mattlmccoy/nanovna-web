@@ -2,6 +2,8 @@
 
 NanoVNA Saver commit `3445a0a` is the behavioral reference used for this audit. “Parity” means equivalent measurement capability, not identical desktop widgets. NanoVNA Web keeps its browser-only comparison, draggable-marker, interpretation, and metadata features.
 
+NanoVNA Web also includes a separate impedance-sonification instrument mode. It is not an upstream Saver feature and does not count toward parity.
+
 ## Acquisition and device control
 
 - Implemented: Web Serial connection, firmware command detection, current-buffer following, strict grid validation, linear and logarithmic segmented sweeps, continuous sweeps, stop between device responses, single/truncated complex averaging, partial-sweep retention, device calibration state and slots, and firmware-advertised bandwidth control for direct-Hz and Dislord command families.

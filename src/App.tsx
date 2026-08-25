@@ -6,6 +6,7 @@ import { ComparisonMode, type ComparisonDataset } from './components/ComparisonM
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { TdrPanel } from './components/TdrPanel';
 import { DEFAULT_DISPLAY_SETTINGS, DisplaySettingsPanel, type DisplaySettings } from './components/DisplaySettingsPanel';
+import { InstrumentPanel, type InstrumentReference } from './components/InstrumentPanel';
 
 type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's21-magnitude' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
 type Marker = { id: number; index: number; color: string };
@@ -690,6 +691,7 @@ export default function App() {
   const [logarithmicSweep, setLogarithmicSweep] = useState(false);
   const [connected, setConnected] = useState(false);
   const [firmware, setFirmware] = useState('No device');
+  const [connectionSession, setConnectionSession] = useState('offline');
   const [calibrationState, setCalibrationState] = useState('Unknown');
   const [capabilities, setCapabilities] = useState<NanoVNACapabilities>(EMPTY_CAPABILITIES);
   const [bandwidthOptions, setBandwidthOptions] = useState<number[]>([]);
@@ -719,6 +721,8 @@ export default function App() {
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [tdrOpen, setTdrOpen] = useState(false);
   const [displayOpen, setDisplayOpen] = useState(false);
+  const [instrumentOpen, setInstrumentOpen] = useState(false);
+  const [instrumentReference, setInstrumentReference] = useState<InstrumentReference | null>(null);
   const [comparisonDatasets, setComparisonDatasets] = useState<ComparisonDataset[]>([]);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
   const [suggestedPane, setSuggestedPane] = useState(0);
@@ -745,6 +749,19 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => { localStorage.setItem('nanovna-display-settings', JSON.stringify(displaySettings)); }, [displaySettings]);
+
+  useEffect(() => {
+    const toggleInstrument = (event: KeyboardEvent) => {
+      if (event.altKey && event.shiftKey && event.code === 'KeyM') {
+        const target = event.target as HTMLElement | null;
+        if (target?.matches('input, select, textarea, [contenteditable="true"]')) return;
+        event.preventDefault();
+        setInstrumentOpen((current) => !current);
+      }
+    };
+    window.addEventListener('keydown', toggleInstrument);
+    return () => window.removeEventListener('keydown', toggleInstrument);
+  }, []);
 
   useEffect(() => {
     pointsRef.current = points;
@@ -812,7 +829,8 @@ export default function App() {
       const frequency = parseFrequency(value);
       const index = points.reduce((best, point, candidate) => Math.abs(point.frequency - frequency) < Math.abs(points[best].frequency - frequency) ? candidate : best, 0);
       updateMarker(marker, index);
-    } catch (error) { setMessage((error as Error).message); }
+      return index;
+    } catch (error) { setMessage((error as Error).message); return null; }
   }
 
   function addMarker() {
@@ -866,8 +884,10 @@ export default function App() {
       connectionRef.current = null;
       setConnected(false);
       setFirmware('No device');
+      setConnectionSession('offline');
       setCalibrationState('Unknown');
       setCapabilities(EMPTY_CAPABILITIES);
+      setInstrumentReference(null);
       setBandwidthOptions([]);
       setDeviceBandwidthState(null);
       setCalibrationOpen(false);
@@ -888,12 +908,14 @@ export default function App() {
       connectionRef.current = connection;
       setConnected(true);
       setFirmware(version);
+      setConnectionSession(crypto.randomUUID());
       setCalibrationState(connection.calibration);
       setCapabilities(connection.capabilities);
       setFollowDevice(connection.capabilities.currentData);
       setFollowStatus(connection.capabilities.currentData ? 'Starting…' : 'Current device-buffer commands not advertised');
       setCalibrationStarted(false);
       setCalibrationCompleted([]);
+      setInstrumentReference(null);
       let bandwidthDetail = '';
       if (connection.capabilities.bandwidth) {
         try {
@@ -1134,7 +1156,7 @@ export default function App() {
           <fieldset><legend>Markers</legend>
             {markers.map((marker, index) => <div className="marker-control" key={marker.id}>
               <label>Marker {index + 1}</label>
-              <input defaultValue={formatFrequency(points[marker.index].frequency).replace(' ', '')} key={`${marker.id}-${marker.index}`} onBlur={(event) => setMarkerFrequency(index, event.target.value)} />
+              <input defaultValue={formatFrequency(points[marker.index].frequency).replace(' ', '')} key={`${marker.id}-${marker.index}`} onBlur={(event) => { if (event.currentTarget.dataset.enterCommitted === 'true') { delete event.currentTarget.dataset.enterCommitted; return; } const accepted = setMarkerFrequency(index, event.currentTarget.value); if (accepted !== null) event.currentTarget.value = formatFrequency(points[accepted].frequency).replace(' ', ''); }} onKeyDown={(event) => { if (event.key !== 'Enter') return; event.preventDefault(); const accepted = setMarkerFrequency(index, event.currentTarget.value); if (accepted !== null) event.currentTarget.value = formatFrequency(points[accepted].frequency).replace(' ', ''); event.currentTarget.dataset.enterCommitted = 'true'; event.currentTarget.blur(); }} />
               <input className="marker-color" type="color" value={marker.color} onChange={(event) => setMarkerColor(index, event.target.value)} aria-label={`Marker ${index + 1} color`} />
               <input type="radio" name="marker" checked={activeMarker === index} onChange={() => setActiveMarker(index)} aria-label={`Select marker ${index + 1}`} />
               <button className="marker-remove" onClick={() => removeMarker(index)} disabled={markers.length <= 1} aria-label={`Remove marker ${index + 1}`}>−</button>
@@ -1149,6 +1171,7 @@ export default function App() {
             <button className="wide" onClick={() => setTdrOpen(true)}>Time Domain Reflectometry…</button>
           </fieldset>
           <fieldset><legend>Reference sweep</legend><button className="wide" onClick={() => setReference(points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })))}>Set current as reference</button><button className="wide" onClick={() => setReference(null)} disabled={!reference}>Clear reference</button><small>{reference ? `${reference.length} reference points · dashed gray trace` : 'No reference trace loaded'}</small></fieldset>
+          {instrumentOpen && <InstrumentPanel points={points} markerIndex={markers[activeMarker]?.index ?? 0} reference={instrumentReference} currentContext={{ device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel }} dataFresh={connected && !busy && sourceInfo.sourceKind === 'device' && !followStatus.startsWith('Stale')} onCaptureReference={() => { setInstrumentReference({ points: points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })), device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel }); setMessage('Instrument silence reference captured from a fresh complete sweep. Start audio, then move or touch the sensed object.'); }} onClose={() => setInstrumentOpen(false)} />}
           <fieldset><legend>Serial port control</legend>
             <div className={`serial-status ${connected ? 'online' : ''}`}>{connected ? `Connected · 115200 baud` : 'No serial port connected'}</div>
             <label className="check-row"><input type="checkbox" checked={followDevice} onChange={(event) => { setFollowDevice(event.target.checked); setFollowStatus(event.target.checked ? 'Starting…' : 'Inactive'); }} disabled={!connected || busy || !capabilities.currentData} /> Follow current device buffers</label>
@@ -1242,6 +1265,7 @@ export default function App() {
             <h3>Credits</h3>
             <p>This is a separate browser implementation. Its protocol behavior and feature design were informed by <a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a>, created by Rune B. Broberg and maintained by its contributors.</p>
             <p><a href="https://github.com/mattlmccoy/nanovna-web" target="_blank" rel="noreferrer">Source and notices</a></p>
+            <p><button onClick={() => { setInstrumentOpen(true); setAboutOpen(false); }}>Instrument mode</button> <small>Shortcut: Option/Alt + Shift + M</small></p>
           </div>
         </section>
       </div>}

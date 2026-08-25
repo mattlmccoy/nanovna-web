@@ -11,13 +11,14 @@ Browser interface for NanoVNA devices.
 - Single and truncated-mean sweep averaging with processing provenance in plot and Touchstone exports
 - Linear or logarithmic segmented sweep spacing and compatible firmware-advertised measurement-bandwidth control
 - Delta markers against another marker or the reference sweep
+- Hidden impedance-sonification mode with a dedicated silence reference, signed-reactance pitch mapping, impedance-change loudness mapping, stale-data muting, and hard audio limits (Option/Alt + Shift + M)
 - Firmware capability detection and device-reported calibration-state readout when supported
 - NanoVNA shell support for `version`, `help`, `sweep`, `scan`, `frequencies`, `data 0`, and `data 1`
 - Multi-segment S11/S21 sweeps
 - Single and continuous sweep modes with live plot updates after every completed segment, partial-sweep labeling, and segment-boundary stop handling
 - Guided device-managed OPEN/SHORT/LOAD and ISOLATION/THRU calibration, correction enable/disable, and common calibration-slot 0–4 save/recall when advertised by firmware
 - Acquired or explicitly averaged complex samples with no hidden browser smoothing, curve fitting, or resampling
-- Addable/removable markers with selectable colors, real-time plot dragging, and frequency, impedance, admittance, S11, reflected-power, S21, phase, and VSWR readouts
+- Addable/removable markers with selectable colors, real-time plot dragging, Enter-to-commit frequency entry, and frequency, impedance, admittance, S11, reflected-power, S21, phase, and VSWR readouts
 - Plot-local live marker strips with diagnostic-specific quantities and units
 - Deterministic suggested-view guidance derived from the loaded samples with an explicit target-pane selector
 - Beginner measurement guide and contextual interpretation notes for every diagnostic view
