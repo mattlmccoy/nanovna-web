@@ -45,7 +45,16 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .chart-titlebar { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 5px; border-bottom: 1px solid #c1c1be; background: linear-gradient(#efefed, #dcdcd9); }
 .chart-titlebar select { min-width: 0; flex: 1; }
 .chart-titlebar button { white-space: nowrap; }
-.chart-panel canvas { width: 100%; height: 100%; min-height: 240px; cursor: crosshair; touch-action: none; user-select: none; }
+.chart-plot { position: relative; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
+.trace-canvas { display: block; width: 100%; height: 100%; min-height: 240px; cursor: crosshair; touch-action: none; user-select: none; }
+.marker-canvas { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.chart-trackers { position: absolute; z-index: 2; top: 7px; right: 7px; display: grid; max-width: calc(100% - 58px); max-height: 42%; overflow: auto; border: 1px solid rgba(85,85,82,.48); border-radius: 4px; background: rgba(244,244,240,.91); box-shadow: 0 2px 7px rgba(0,0,0,.18); backdrop-filter: blur(3px); }
+.chart-tracker { display: grid; grid-template-columns: 24px auto minmax(0,1fr); align-items: baseline; gap: 6px; width: 100%; min-height: 23px; padding: 3px 6px; border: 0; border-bottom: 1px solid rgba(120,120,116,.3); border-left: 4px solid; border-radius: 0; background: transparent; box-shadow: none; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 9px; font-weight: 400; text-align: left; white-space: nowrap; }
+.chart-tracker:last-child { border-bottom: 0; }
+.chart-tracker:hover:not(:disabled) { border-color: rgba(120,120,116,.3); border-left-color: inherit; background: rgba(255,255,255,.55); }
+.chart-tracker.active { background: rgba(241,213,28,.17); box-shadow: inset 0 0 0 1px rgba(170,151,16,.23); }
+.chart-tracker b { font-size: 9px; }
+.chart-tracker span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .statusbar { min-height: 29px; display: flex; justify-content: space-between; gap: 20px; padding: 7px 11px; border-top: 1px solid #9e9e9b; background: linear-gradient(#e7e7e4, #cececb); box-shadow: inset 0 1px rgba(255,255,255,.8); color: #333; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 10px; }
 .statusbar a { color: inherit; font-weight: 700; text-underline-offset: 2px; }
 .statusbar span:first-child::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--yellow); border: 1px solid #aa9710; box-shadow: 0 0 4px rgba(241,213,28,.7); }
@@ -80,6 +89,10 @@ html[data-theme='dark'] .serial-status { color: #aeb0b2; border-color: #111214; 
 html[data-theme='dark'] .serial-status.online { color: #74d88c; background: #17281d; }
 html[data-theme='dark'] .chart-panel { border-color: #0f1012; background: #17181a; box-shadow: inset 0 1px rgba(255,255,255,.05), 0 5px 11px rgba(0,0,0,.5); }
 html[data-theme='dark'] .chart-titlebar { border-color: #121315; background: linear-gradient(#3a3b3e, #292a2d); }
+html[data-theme='dark'] .chart-trackers { border-color: rgba(130,132,136,.58); background: rgba(31,32,35,.9); box-shadow: 0 2px 8px rgba(0,0,0,.55); }
+html[data-theme='dark'] .chart-tracker { color: #deded9; border-bottom-color: rgba(125,127,131,.35); background: transparent; }
+html[data-theme='dark'] .chart-tracker:hover:not(:disabled) { border-color: rgba(125,127,131,.35); border-left-color: inherit; background: rgba(76,78,82,.55); }
+html[data-theme='dark'] .chart-tracker.active { background: rgba(241,213,28,.14); box-shadow: inset 0 0 0 1px rgba(241,213,28,.18); }
 html[data-theme='dark'] .statusbar { color: #cacac5; border-color: #0f1012; background: linear-gradient(#303134, #222326); box-shadow: inset 0 1px rgba(255,255,255,.06); }
 html[data-theme='dark'] .about-dialog { color: #deded9; border-color: #101113; background: #292a2d; box-shadow: 0 18px 55px rgba(0,0,0,.72), inset 0 1px rgba(255,255,255,.07); }
 html[data-theme='dark'] .about-titlebar { border-color: #111214; background: linear-gradient(#3b3c40, #28292c); }

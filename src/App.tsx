@@ -88,6 +88,54 @@ function groupDelay(points: SweepPoint[], channel: 's11' | 's21'): number[] {
   });
 }
 
+function signedValue(value: number, digits: number, unit = ''): string {
+  if (!Number.isFinite(value)) return `—${unit ? ` ${unit}` : ''}`;
+  return `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(digits)}${unit ? ` ${unit}` : ''}`;
+}
+
+function chartMarkerValue(mode: ViewMode, point: SweepPoint, index: number, delayValues: number[] | null): string {
+  const z = impedance(point.s11);
+  const y = admittance(point.s11);
+  if (mode === 'smith') return `Z ${formatNumber(z.re, 2)} ${signedValue(z.im, 2).replace(/^[+−]/, (sign) => `${sign} j`)} Ω`;
+  if (mode === 'return-loss') return `S11 ${formatNumber(db(point.s11), 2)} dB · S21 ${formatNumber(db(point.s21), 2)} dB`;
+  if (mode === 's21-polar') return `|S21| ${formatNumber(magnitude(point.s21), 3)} ratio · ∠ ${formatNumber(phase(point.s21), 1)}°`;
+  if (mode === 'resistance-reactance') return `R ${formatNumber(z.re, 2)} Ω · X ${signedValue(z.im, 2, 'Ω')}`;
+  if (mode === 'admittance') return `G ${formatNumber(y.re * 1000, 2)} mS · B ${signedValue(y.im * 1000, 2, 'mS')}`;
+  if (mode === 'phase') return `S11 ${formatNumber(phase(point.s11), 1)}° · S21 ${formatNumber(phase(point.s21), 1)}°`;
+  if (mode === 'vswr') return `VSWR ${Number.isFinite(vswr(point.s11)) ? `${formatNumber(vswr(point.s11), 3)}:1` : '∞:1'}`;
+  if (mode === 's21-gain') return `S21 ${formatNumber(db(point.s21), 2)} dB`;
+  if (mode === 's11-magnitude') return `|Γ| ${formatNumber(magnitude(point.s11), 4)} ratio`;
+  if (mode === 's11-z-magnitude') return `|Z| ${formatNumber(magnitude(z), 2)} Ω`;
+  if (mode === 's11-components') return `Re ${signedValue(point.s11.re, 4)} · Im ${signedValue(point.s11.im, 4)} ratio`;
+  if (mode === 's21-components') return `Re ${signedValue(point.s21.re, 4)} · Im ${signedValue(point.s21.im, 4)} ratio`;
+  if (mode === 's11-group-delay' || mode === 's21-group-delay') return `Delay ${formatNumber(delayValues?.[index] ?? Number.NaN, 3)} ns`;
+  if (mode === 'q-factor') return `Q ${z.re === 0 ? '—' : formatNumber(Math.abs(z.im / z.re), 3)} dimensionless`;
+  if (mode === 'capacitance') return `C ${z.im < 0 ? formatNumber(-1 / (2 * Math.PI * point.frequency * z.im) * 1e12, 3) : '—'} pF`;
+  if (mode === 'inductance') return `L ${z.im > 0 ? formatNumber(z.im / (2 * Math.PI * point.frequency) * 1e9, 3) : '—'} nH`;
+  const model = s21Impedance(point.s21, mode === 's21-shunt-z');
+  return `R ${formatNumber(model.re, 2)} Ω · X ${signedValue(model.im, 2, 'Ω')}`;
+}
+
+function drawCanvasMarker(ctx: CanvasRenderingContext2D, position: { x: number; y: number }, color: string, label: number, dark: boolean, active: boolean) {
+  if (active) {
+    ctx.strokeStyle = dark ? '#f4e65d' : '#6f6300';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(position.x, position.y - 4, 8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(position.x, position.y);
+  ctx.lineTo(position.x - 5, position.y - 9);
+  ctx.lineTo(position.x + 5, position.y - 9);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = dark ? '#f1f1ed' : '#111';
+  ctx.font = `${active ? 'bold ' : ''}10px Arial, sans-serif`;
+  ctx.fillText(`M${label + 1}`, position.x + 6, position.y - 4);
+}
+
 function primaryTrace(mode: ViewMode, points: SweepPoint[]): number[] {
   if (mode === 'return-loss') return points.map((point) => db(point.s11));
   if (mode === 's21-gain') return points.map((point) => db(point.s21));
@@ -129,10 +177,16 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
   onModeChange: (mode: ViewMode) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const markerCanvasRef = useRef<HTMLCanvasElement>(null);
   const geometryRef = useRef<{ x: number; y: number; w: number; h: number; smith: boolean }>({ x: 0, y: 0, w: 0, h: 0, smith: false });
-  const markerPositionsRef = useRef<Array<{ x: number; y: number } | undefined>>([]);
+  const pointPositionsRef = useRef<Array<{ x: number; y: number }>>([]);
   const draggingMarkerRef = useRef<number | null>(null);
   const [resizeVersion, setResizeVersion] = useState(0);
+  const delayValues = useMemo(() => {
+    if (mode === 's11-group-delay') return groupDelay(points, 's11');
+    if (mode === 's21-group-delay') return groupDelay(points, 's21');
+    return null;
+  }, [mode, points]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -178,18 +232,6 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
       ctx.stroke();
     };
 
-    const drawMarker = (index: number, color: string, position: { x: number; y: number }, label: number) => {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(position.x, position.y);
-      ctx.lineTo(position.x - 5, position.y - 9);
-      ctx.lineTo(position.x + 5, position.y - 9);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = dark ? '#f1f1ed' : '#111';
-      ctx.fillText(`M${label + 1}`, position.x + 6, position.y - 4);
-    };
-
     if (mode === 'smith' || mode === 's21-polar') {
       const radius = Math.min(area.w, area.h) * 0.46;
       const cx = area.x + area.w / 2;
@@ -222,8 +264,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
         ctx.setLineDash([4, 3]); line(referencePositions, dark ? '#b0b0aa' : '#777777'); ctx.setLineDash([]);
       }
       line(positions, mode === 'smith' ? TRACE.magenta : TRACE.yellow);
-      markerPositionsRef.current = markers.map((marker) => positions[marker.index]);
-      markers.forEach((marker, index) => drawMarker(marker.index, marker.color, positions[marker.index], index));
+      pointPositionsRef.current = positions;
       return;
     }
 
@@ -292,18 +333,32 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
       ctx.setLineDash([4, 3]); line(positions, dark ? '#b0b0aa' : '#777777'); ctx.setLineDash([]);
       ctx.fillStyle = dark ? '#c7c7c2' : '#555'; ctx.fillText('Ref', area.x + area.w - 24, 6);
     }
-    markers.forEach((marker, index) => {
-      const position = positionsBySeries[0][marker.index];
-      if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) drawMarker(marker.index, marker.color, position, index);
-    });
-    markerPositionsRef.current = markers.map((marker) => positionsBySeries[0]?.[marker.index]);
+    pointPositionsRef.current = positionsBySeries[0] ?? [];
     series.forEach((item, index) => {
       ctx.fillStyle = item.color;
       ctx.fillRect(area.x + index * 86, 2, 12, 2);
       ctx.fillStyle = dark ? '#deded9' : '#222';
       ctx.fillText(`${item.label} (${item.unit})`, area.x + 16 + index * 86, 6);
     });
-  }, [activeMarker, markers, mode, points, reference, resizeVersion, theme]);
+  }, [mode, points, reference, resizeVersion, theme]);
+
+  useEffect(() => {
+    const base = canvasRef.current;
+    const overlay = markerCanvasRef.current;
+    if (!base || !overlay) return;
+    const ratio = window.devicePixelRatio || 1;
+    const bounds = base.getBoundingClientRect();
+    overlay.width = Math.floor(bounds.width * ratio);
+    overlay.height = Math.floor(bounds.height * ratio);
+    const ctx = overlay.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(ratio, ratio);
+    const dark = theme === 'dark';
+    markers.forEach((marker, index) => {
+      const position = pointPositionsRef.current[marker.index];
+      if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) drawCanvasMarker(ctx, position, marker.color, index, dark, activeMarker === index);
+    });
+  }, [activeMarker, markers, mode, points, resizeVersion, theme]);
 
   function moveMarkerToPointer(marker: number, clientX: number, clientY: number) {
     const canvas = canvasRef.current;
@@ -338,7 +393,8 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
     const rect = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
-    const closest = markerPositionsRef.current.reduce((best, position, index) => {
+    const closest = markers.reduce((best, marker, index) => {
+      const position = pointPositionsRef.current[marker.index];
       if (!position) return best;
       const distance = Math.hypot(position.x - x, position.y - y);
       return distance < best.distance ? { index, distance } : best;
@@ -361,7 +417,17 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
   }
 
   function savePng() {
-    canvasRef.current?.toBlob((blob) => blob && downloadBlob(blob, `${mode}-${Date.now()}.png`), 'image/png');
+    const base = canvasRef.current;
+    const overlay = markerCanvasRef.current;
+    if (!base || !overlay) return;
+    const composite = document.createElement('canvas');
+    composite.width = base.width;
+    composite.height = base.height;
+    const ctx = composite.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(base, 0, 0);
+    ctx.drawImage(overlay, 0, 0);
+    composite.toBlob((blob) => blob && downloadBlob(blob, `${mode}-${Date.now()}.png`), 'image/png');
   }
 
   return (
@@ -372,7 +438,20 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
         </select>
         <button onClick={savePng}>Save PNG</button>
       </div>
-      <canvas ref={canvasRef} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerEnd} onPointerCancel={handlePointerEnd} aria-label={VIEW_LABELS[mode]} />
+      <div className="chart-plot">
+        <canvas className="trace-canvas" ref={canvasRef} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerEnd} onPointerCancel={handlePointerEnd} aria-label={VIEW_LABELS[mode]} />
+        <canvas className="marker-canvas" ref={markerCanvasRef} aria-hidden="true" />
+        <div className="chart-trackers" aria-label={`${VIEW_LABELS[mode]} marker readouts`}>
+          {markers.map((marker, index) => {
+            const point = points[marker.index];
+            return <button className={`chart-tracker ${activeMarker === index ? 'active' : ''}`} style={{ borderLeftColor: marker.color }} onClick={() => onActiveMarkerChange(index)} key={marker.id}>
+              <b style={{ color: marker.color }}>M{index + 1}</b>
+              <span>{formatFrequency(point.frequency)}</span>
+              <span>{chartMarkerValue(mode, point, marker.index, delayValues)}</span>
+            </button>;
+          })}
+        </div>
+      </div>
     </section>
   );
 }
@@ -401,6 +480,7 @@ export default function App() {
   const stopRequestedRef = useRef(false);
   const markerIdRef = useRef(4);
   const [points, setPoints] = useState(() => demoSweep(1e6, 51e6, 1001));
+  const pointsRef = useRef(points);
   const [reference, setReference] = useState<SweepPoint[] | null>(null);
   const [start, setStart] = useState('1M');
   const [stop, setStop] = useState('51M');
@@ -430,6 +510,10 @@ export default function App() {
     localStorage.setItem('nanovna-theme', theme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1d1e20' : '#cfcfcd');
   }, [theme]);
+
+  useEffect(() => {
+    pointsRef.current = points;
+  }, [points]);
 
   useEffect(() => {
     if (!aboutOpen) return;
@@ -468,11 +552,13 @@ export default function App() {
   }
 
   function remapMarkersToFrequencies(data: SweepPoint[]) {
+    const sourcePoints = pointsRef.current;
     setMarkers((current) => current.map((marker) => {
-      const frequency = points[Math.min(marker.index, points.length - 1)].frequency;
+      const frequency = sourcePoints[Math.min(marker.index, sourcePoints.length - 1)].frequency;
       const index = data.reduce((best, point, candidate) => Math.abs(point.frequency - frequency) < Math.abs(data[best].frequency - frequency) ? candidate : best, 0);
       return { ...marker, index };
     }));
+    pointsRef.current = data;
   }
 
   async function toggleConnection() {

@@ -11,6 +11,7 @@ Browser interface for NanoVNA devices.
 - Single and continuous sweep modes with segment-boundary stop handling
 - Raw device samples with no smoothing, curve fitting, or hidden resampling
 - Addable/removable markers with selectable colors, real-time plot dragging, and frequency, impedance, admittance, S11, reflected-power, S21, phase, and VSWR readouts
+- Plot-local live marker strips with diagnostic-specific quantities and units
 - Capturable reference sweep overlaid as a dashed trace
 - Four configurable diagnostic panes
 - Persistent light/dark mode with system preference detection
