@@ -29,6 +29,7 @@ export type CalibrationStep = 'load' | 'open' | 'short' | 'thru' | 'isoln';
 export interface NanoVNACapabilities {
   scan: boolean;
   scanMask: boolean;
+  currentData: boolean;
   calibration: boolean;
   calibrationSlots: boolean;
   pauseResume: boolean;
@@ -85,24 +86,45 @@ export function validateCalibrationSlot(slot: number): number {
   return slot;
 }
 
+export function assembleCurrentSweep(frequencyLines: string[], s11Lines: string[], s21Lines: string[], verificationFrequencyLines: string[]): SweepPoint[] {
+  const frequencies = frequencyLines.map(Number);
+  const verificationFrequencies = verificationFrequencyLines.map(Number);
+  const s11Rows = s11Lines.map(parseComplex);
+  const s21Rows = s21Lines.map(parseComplex);
+  if (frequencies.some((value) => !Number.isFinite(value)) || verificationFrequencies.some((value) => !Number.isFinite(value)) || s11Rows.some((value) => value === null) || s21Rows.some((value) => value === null)) {
+    throw new Error('The current device buffers contained a malformed or nonfinite row. The previous valid plot was retained.');
+  }
+  if (frequencies.length !== verificationFrequencies.length || frequencies.some((frequency, index) => frequency !== verificationFrequencies[index])) {
+    throw new Error('The device frequency grid changed while its buffers were being read. The previous valid plot was retained.');
+  }
+  if (frequencies.some((frequency, index) => index > 0 && frequency <= frequencies[index - 1])) throw new Error('The current device frequency grid is not strictly increasing. The previous valid plot was retained.');
+  const s11 = s11Rows as Complex[];
+  const s21 = s21Rows as Complex[];
+  if (!frequencies.length || frequencies.length !== s11.length || s11.length !== s21.length) throw new Error(`Incomplete current display: ${frequencies.length} frequencies, ${s11.length} S11 rows, ${s21.length} S21 rows.`);
+  return frequencies.map((frequency, index) => ({ frequency, s11: s11[index], s21: s21[index] }));
+}
+
 export class NanoVNAConnection {
   private port: SerialPortLike | null = null;
   private reader: SerialReader | null = null;
   private writer: SerialWriter | null = null;
   private decoder = new TextDecoder();
   private encoder = new TextEncoder();
+  private operationQueue: Promise<void> = Promise.resolve();
+  private closing = false;
   version = 'Unknown firmware';
   calibration = 'Unknown';
   supportsScan = false;
   supportsScanMask = false;
   commands = new Set<string>();
-  capabilities: NanoVNACapabilities = { scan: false, scanMask: false, calibration: false, calibrationSlots: false, pauseResume: false, bandwidth: false };
+  capabilities: NanoVNACapabilities = { scan: false, scanMask: false, currentData: false, calibration: false, calibrationSlots: false, pauseResume: false, bandwidth: false };
 
   static supported(): boolean {
     return Boolean((navigator as SerialNavigator).serial);
   }
 
   async connect(): Promise<string> {
+    this.closing = false;
     const serial = (navigator as SerialNavigator).serial;
     if (!serial) throw new Error('Web Serial is unavailable. Use desktop Chrome or Edge.');
     try {
@@ -121,12 +143,13 @@ export class NanoVNAConnection {
       this.capabilities = {
         scan: this.supportsScan,
         scanMask: this.supportsScanMask,
+        currentData: this.commands.has('frequencies') && this.commands.has('data'),
         calibration: this.commands.has('cal'),
         calibrationSlots: this.commands.has('cal') && this.commands.has('save') && this.commands.has('recall'),
         pauseResume: this.commands.has('pause') && this.commands.has('resume'),
         bandwidth: this.commands.has('bandwidth'),
       };
-      if (this.capabilities.calibration) await this.refreshCalibration();
+      if (this.capabilities.calibration) await this.refreshCalibrationRaw();
       return this.version;
     } catch (error) {
       await this.disconnect();
@@ -135,6 +158,8 @@ export class NanoVNAConnection {
   }
 
   async disconnect(): Promise<void> {
+    this.closing = true;
+    try { await this.operationQueue; } catch { /* a failed operation must not block cleanup */ }
     try { await this.reader?.cancel(); } catch { /* port may already be gone */ }
     try { this.reader?.releaseLock(); } catch { /* lock may already be released */ }
     try { this.writer?.releaseLock(); } catch { /* lock may already be released */ }
@@ -145,6 +170,7 @@ export class NanoVNAConnection {
   }
 
   async sweep(start: number, stop: number, points: number, segments = 1, onSegment?: (update: SweepUpdate) => void, isCancelled?: () => boolean): Promise<SweepResult> {
+    return this.runExclusive(async () => {
     const result: SweepPoint[] = [];
     const ranges = segmentRanges(start, stop, points, segments);
     let completedSegments = 0;
@@ -157,52 +183,91 @@ export class NanoVNAConnection {
     }
     const cancelled = Boolean(isCancelled?.()) && completedSegments < segments;
     return { points: result, completedSegments, totalSegments: segments, progress: completedSegments / segments, cancelled, complete: completedSegments === segments };
+    });
   }
 
   async refreshCalibration(): Promise<string> {
+    return this.runExclusive(() => this.refreshCalibrationRaw());
+  }
+
+  async readCurrentSweep(): Promise<SweepPoint[]> {
+    return this.runExclusive(async () => {
+      this.requireCapability('currentData', 'Current device-display data');
+      const frequencyLines = await this.command('frequencies', 15000);
+      const s11Lines = await this.command('data 0', 15000);
+      const s21Lines = await this.command('data 1', 15000);
+      const verificationFrequencyLines = await this.command('frequencies', 15000);
+      return assembleCurrentSweep(frequencyLines, s11Lines, s21Lines, verificationFrequencyLines);
+    });
+  }
+
+  async collectCalibration(step: CalibrationStep, start: number, stop: number, points: number): Promise<{ points: SweepPoint[]; state: string }> {
+    return this.runExclusive(async () => {
+      this.requireCapability('calibration', 'Device calibration commands');
+      const values = await this.readSegment(start, stop, points);
+      this.assertAccepted(`cal ${step}`, await this.command(`cal ${step}`, 15000));
+      return { points: values, state: await this.refreshCalibrationRaw() };
+    });
+  }
+
+  async resetCalibration(): Promise<string> {
+    return this.runExclusive(async () => {
+      this.requireCapability('calibration', 'Device calibration commands');
+      this.assertAccepted('cal reset', await this.command('cal reset'));
+      return this.refreshCalibrationRaw();
+    });
+  }
+
+  async finishCalibration(): Promise<string> {
+    return this.runExclusive(async () => {
+      this.requireCapability('calibration', 'Device calibration commands');
+      this.assertAccepted('cal done', await this.command('cal done', 15000));
+      this.assertAccepted('cal on', await this.command('cal on'));
+      return this.refreshCalibrationRaw();
+    });
+  }
+
+  async setCalibrationEnabled(enabled: boolean): Promise<string> {
+    return this.runExclusive(async () => {
+      this.requireCapability('calibration', 'Device calibration commands');
+      this.assertAccepted(`cal ${enabled ? 'on' : 'off'}`, await this.command(`cal ${enabled ? 'on' : 'off'}`));
+      return this.refreshCalibrationRaw();
+    });
+  }
+
+  async saveCalibrationSlot(slot: number): Promise<string> {
+    return this.runExclusive(async () => {
+      this.requireCapability('calibrationSlots', 'Calibration slot storage');
+      const id = validateCalibrationSlot(slot);
+      this.assertAccepted(`save ${id}`, await this.command(`save ${id}`, 15000));
+      return this.refreshCalibrationRaw();
+    });
+  }
+
+  async recallCalibrationSlot(slot: number): Promise<string> {
+    return this.runExclusive(async () => {
+      this.requireCapability('calibrationSlots', 'Calibration slot storage');
+      const id = validateCalibrationSlot(slot);
+      this.assertAccepted(`recall ${id}`, await this.command(`recall ${id}`, 15000));
+      return this.refreshCalibrationRaw();
+    });
+  }
+
+  private async refreshCalibrationRaw(): Promise<string> {
     this.requireCapability('calibration', 'Device calibration commands');
     this.calibration = (await this.command('cal')).join(' ').trim() || 'No calibration terms reported';
     return this.calibration;
   }
 
-  async collectCalibration(step: CalibrationStep, start: number, stop: number, points: number): Promise<{ points: SweepPoint[]; state: string }> {
-    this.requireCapability('calibration', 'Device calibration commands');
-    const values = await this.readSegment(start, stop, points);
-    this.assertAccepted(`cal ${step}`, await this.command(`cal ${step}`, 15000));
-    return { points: values, state: await this.refreshCalibration() };
-  }
-
-  async resetCalibration(): Promise<string> {
-    this.requireCapability('calibration', 'Device calibration commands');
-    this.assertAccepted('cal reset', await this.command('cal reset'));
-    return this.refreshCalibration();
-  }
-
-  async finishCalibration(): Promise<string> {
-    this.requireCapability('calibration', 'Device calibration commands');
-    this.assertAccepted('cal done', await this.command('cal done', 15000));
-    this.assertAccepted('cal on', await this.command('cal on'));
-    return this.refreshCalibration();
-  }
-
-  async setCalibrationEnabled(enabled: boolean): Promise<string> {
-    this.requireCapability('calibration', 'Device calibration commands');
-    this.assertAccepted(`cal ${enabled ? 'on' : 'off'}`, await this.command(`cal ${enabled ? 'on' : 'off'}`));
-    return this.refreshCalibration();
-  }
-
-  async saveCalibrationSlot(slot: number): Promise<string> {
-    this.requireCapability('calibrationSlots', 'Calibration slot storage');
-    const id = validateCalibrationSlot(slot);
-    this.assertAccepted(`save ${id}`, await this.command(`save ${id}`, 15000));
-    return this.refreshCalibration();
-  }
-
-  async recallCalibrationSlot(slot: number): Promise<string> {
-    this.requireCapability('calibrationSlots', 'Calibration slot storage');
-    const id = validateCalibrationSlot(slot);
-    this.assertAccepted(`recall ${id}`, await this.command(`recall ${id}`, 15000));
-    return this.refreshCalibration();
+  private runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closing) return Promise.reject(new Error('The NanoVNA connection is closing.'));
+    const guardedOperation = () => {
+      if (this.closing) throw new Error('The NanoVNA connection is closing.');
+      return operation();
+    };
+    const result = this.operationQueue.then(guardedOperation, guardedOperation);
+    this.operationQueue = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private requireCapability(capability: keyof NanoVNACapabilities, label: string) {

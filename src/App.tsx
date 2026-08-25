@@ -56,7 +56,7 @@ type PlotSuggestion = { mode: ViewMode; title: string; reason: string };
 
 const TRACE = { magenta: '#a9008b', yellow: '#e2aa00', cyan: '#009d9a', red: '#d7191c', green: '#20aa35', blue: '#173de3' };
 const DEFAULT_MARKER_COLORS = [TRACE.blue, TRACE.red, TRACE.green, TRACE.magenta, TRACE.yellow, TRACE.cyan];
-const EMPTY_CAPABILITIES: NanoVNACapabilities = { scan: false, scanMask: false, calibration: false, calibrationSlots: false, pauseResume: false, bandwidth: false };
+const EMPTY_CAPABILITIES: NanoVNACapabilities = { scan: false, scanMask: false, currentData: false, calibration: false, calibrationSlots: false, pauseResume: false, bandwidth: false };
 const CALIBRATION_STEPS: Array<{ key: CalibrationStep; title: string; instruction: string; requiredFor: 'one-port' | 'two-port' }> = [
   { key: 'open', title: 'OPEN', instruction: 'Connect the OPEN standard to port 1 at the intended reference plane.', requiredFor: 'one-port' },
   { key: 'short', title: 'SHORT', instruction: 'Connect the SHORT standard to port 1 at the same reference plane.', requiredFor: 'one-port' },
@@ -627,6 +627,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [continuous, setContinuous] = useState(false);
+  const [followDevice, setFollowDevice] = useState(false);
+  const [followStatus, setFollowStatus] = useState('Inactive');
   const [message, setMessage] = useState('Demo data shown. Browser smoothing OFF. Device calibration state unknown.');
   const [sourceInfo, setSourceInfo] = useState<PlotExportContext>({ sourceName: 'Demo sweep', sourceKind: 'demo', device: 'Offline demo', calibration: 'Not applicable' });
   const initial = markerIndex(points);
@@ -655,6 +657,40 @@ export default function App() {
   useEffect(() => {
     pointsRef.current = points;
   }, [points]);
+
+  useEffect(() => {
+    if (!connected || !followDevice || busy || !capabilities.currentData || !connectionRef.current) return;
+    const connection = connectionRef.current;
+    let cancelled = false;
+    const wait = () => new Promise<void>((resolve) => { setTimeout(resolve, 200); });
+    const follow = async () => {
+      while (!cancelled) {
+        try {
+          const data = await connection.readCurrentSweep();
+          if (cancelled) break;
+          setPoints(data);
+          remapMarkersToFrequencies(data);
+          setSourceInfo({ sourceName: `${firmware} current device buffers`, sourceKind: 'device', device: firmware, calibration: calibrationState });
+          setProgress(1);
+          setFollowStatus(`${data.length} samples · ${formatFrequency(data[0].frequency)} – ${formatFrequency(data.at(-1)!.frequency)} · updated ${new Date().toLocaleTimeString()}`);
+        } catch (error) {
+          if (cancelled) break;
+          const detail = (error as Error).message;
+          setFollowStatus(`Stale · ${detail}`);
+          setSourceInfo((current) => ({
+            ...current,
+            sourceName: current.sourceName.endsWith(' (stale)') ? current.sourceName : `${current.sourceName} (stale)`,
+          }));
+          setFollowDevice(false);
+          setMessage(`Device-buffer following stopped; the last valid plot is marked stale. ${detail}`);
+          break;
+        }
+        await wait();
+      }
+    };
+    void follow();
+    return () => { cancelled = true; };
+  }, [busy, calibrationState, capabilities.currentData, connected, firmware, followDevice]);
 
   useEffect(() => {
     if (!aboutOpen && !helpOpen && !calibrationOpen) return;
@@ -713,6 +749,8 @@ export default function App() {
 
   async function toggleConnection() {
     if (connected) {
+      setFollowDevice(false);
+      setFollowStatus('Inactive');
       await connectionRef.current?.disconnect();
       connectionRef.current = null;
       setConnected(false);
@@ -739,6 +777,8 @@ export default function App() {
       setFirmware(version);
       setCalibrationState(connection.calibration);
       setCapabilities(connection.capabilities);
+      setFollowDevice(connection.capabilities.currentData);
+      setFollowStatus(connection.capabilities.currentData ? 'Starting…' : 'Current device-buffer commands not advertised');
       setCalibrationStarted(false);
       setCalibrationCompleted([]);
       setMessage(`Connected at 115200 baud · ${version} · ${connection.capabilities.calibration ? 'device calibration controls available' : 'calibration commands not advertised'}.`);
@@ -748,6 +788,8 @@ export default function App() {
 
   async function runSweep() {
     if (!connectionRef.current || !connected) { setMessage('Connect a NanoVNA before starting a live sweep.'); return; }
+    setFollowDevice(false);
+    setFollowStatus('Inactive while NanoVNA Web controls the sweep');
     setBusy(true); setProgress(0); stopRequestedRef.current = false;
     let retainedPartial: SweepPoint[] = [];
     let retainedSegments = 0;
@@ -787,6 +829,8 @@ export default function App() {
         setConnected(false);
         setFirmware('No device');
         setCapabilities(EMPTY_CAPABILITIES);
+        setFollowDevice(false);
+        setFollowStatus('Inactive');
         setCalibrationState('Unknown');
         setCalibrationOpen(false);
         setCalibrationStarted(false);
@@ -803,6 +847,8 @@ export default function App() {
 
   async function beginCalibration() {
     if (!connectionRef.current || !window.confirm('Reset the active in-memory device calibration? This cannot be undone unless it was already saved to a NanoVNA slot. Save the current calibration first if you may need it.')) return;
+    setFollowDevice(false);
+    setFollowStatus('Inactive during guided calibration');
     setBusy(true);
     try {
       const state = await connectionRef.current.resetCalibration();
@@ -850,35 +896,41 @@ export default function App() {
 
   async function setDeviceCalibrationEnabled(enabled: boolean) {
     if (!connectionRef.current) return;
+    const resumeFollow = followDevice;
+    setFollowDevice(false);
     setBusy(true);
     try {
       const state = await connectionRef.current.setCalibrationEnabled(enabled);
       setCalibrationState(state);
       setMessage(`Device calibration correction ${enabled ? 'enabled' : 'disabled'} · ${state}.`);
     } catch (error) { setMessage(`Calibration command failed: ${(error as Error).message}`); }
-    finally { setBusy(false); }
+    finally { setBusy(false); if (resumeFollow) setFollowDevice(true); }
   }
 
   async function saveCalibrationSlot() {
     if (!connectionRef.current || !window.confirm(`Overwrite NanoVNA calibration slot ${calibrationSlot}?`)) return;
+    const resumeFollow = followDevice;
+    setFollowDevice(false);
     setBusy(true);
     try {
       const state = await connectionRef.current.saveCalibrationSlot(calibrationSlot);
       setCalibrationState(state);
       setMessage(`Device calibration saved to slot ${calibrationSlot} · ${state}.`);
     } catch (error) { setMessage(`Calibration save failed: ${(error as Error).message}`); }
-    finally { setBusy(false); }
+    finally { setBusy(false); if (resumeFollow) setFollowDevice(true); }
   }
 
   async function recallCalibrationSlot() {
     if (!connectionRef.current || !window.confirm(`Recall NanoVNA calibration slot ${calibrationSlot}? This replaces the active in-memory calibration and may also change the device sweep settings.`)) return;
+    const resumeFollow = followDevice;
+    setFollowDevice(false);
     setBusy(true);
     try {
       const state = await connectionRef.current.recallCalibrationSlot(calibrationSlot);
       setCalibrationState(state);
       setMessage(`Device calibration slot ${calibrationSlot} recalled · ${state}. Confirm the recalled frequency range and reference plane before measuring.`);
     } catch (error) { setMessage(`Calibration recall failed: ${(error as Error).message}`); }
-    finally { setBusy(false); }
+    finally { setBusy(false); if (resumeFollow) setFollowDevice(true); }
   }
 
   function exportCsv() {
@@ -949,6 +1001,8 @@ export default function App() {
           <fieldset><legend>Reference sweep</legend><button className="wide" onClick={() => setReference(points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })))}>Set current as reference</button><button className="wide" onClick={() => setReference(null)} disabled={!reference}>Clear reference</button><small>{reference ? `${reference.length} reference points · dashed gray trace` : 'No reference trace loaded'}</small></fieldset>
           <fieldset><legend>Serial port control</legend>
             <div className={`serial-status ${connected ? 'online' : ''}`}>{connected ? `Connected · 115200 baud` : 'No serial port connected'}</div>
+            <label className="check-row"><input type="checkbox" checked={followDevice} onChange={(event) => { setFollowDevice(event.target.checked); setFollowStatus(event.target.checked ? 'Starting…' : 'Inactive'); }} disabled={!connected || busy || !capabilities.currentData} /> Follow current device buffers</label>
+            <small className={followStatus.startsWith('Stale') ? 'stale-status' : ''}>{followStatus}</small>
             <button className="wide" onClick={toggleConnection} disabled={busy}>{connected ? 'Disconnect' : 'Connect to NanoVNA'}</button>
           </fieldset>
           <fieldset><legend>Device calibration</legend>

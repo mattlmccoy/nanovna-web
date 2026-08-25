@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { atLeastVersion, parseShellCommands, segmentRanges, validateCalibrationSlot } from './nanovna.ts';
+import { assembleCurrentSweep, atLeastVersion, parseShellCommands, segmentRanges, validateCalibrationSlot } from './nanovna.ts';
 
 test('firmware comparison is lexicographic, not component-wise', () => {
   assert.equal(atLeastVersion('0.7.1', [0, 7, 1]), true);
@@ -36,4 +36,16 @@ test('calibration slots stay within the five-slot common firmware range', () => 
   assert.equal(validateCalibrationSlot(4), 4);
   assert.throws(() => validateCalibrationSlot(5), /0 through 4/);
   assert.throws(() => validateCalibrationSlot(1.5), /integer/);
+});
+
+test('current device buffers reject malformed rows and grid changes rather than mispairing data', () => {
+  const frequencies = ['1000000', '2000000'];
+  const s11 = ['0.1 0.2', '0.3 0.4'];
+  const s21 = ['0.5 0.6', '0.7 0.8'];
+  const points = assembleCurrentSweep(frequencies, s11, s21, frequencies);
+  assert.equal(points.length, 2);
+  assert.deepEqual(points[1].s21, { re: 0.7, im: 0.8 });
+  assert.throws(() => assembleCurrentSweep(frequencies, ['bad row', '0.3 0.4'], s21, frequencies), /malformed/);
+  assert.throws(() => assembleCurrentSweep(frequencies, s11, s21, ['1000000', '2100000']), /changed/);
+  assert.throws(() => assembleCurrentSweep(['2000000', '1000000'], s11, s21, ['2000000', '1000000']), /strictly increasing/);
 });
