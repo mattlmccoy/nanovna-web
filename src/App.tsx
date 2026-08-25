@@ -28,6 +28,30 @@ const VIEW_LABELS: Record<ViewMode, string> = {
   's21-shunt-z': 'S21 Shunt-model R + jX (Ω)',
 };
 
+const VIEW_HELP: Record<ViewMode, { what: string; interpret: string }> = {
+  smith: { what: 'Maps complex S11 to normalized impedance. The center is a 50 Ω match; the upper half is inductive and the lower half is capacitive.', interpret: 'Watch how the trace moves around the center. A marker near the center has low reflection, while its direction shows the kind of mismatch.' },
+  'return-loss': { what: 'Shows S11 and S21 log magnitude. More-negative S11 means less reflected signal; S21 shows transmitted gain or loss.', interpret: 'Start here to find matched bands, transmission features, insertion loss, and unexpected ripple. A dip alone does not prove resonance; corroborate it with impedance and phase behavior. This plot uses negative S11 log magnitude, not positive return-loss convention.' },
+  's21-polar': { what: 'Shows complex S21 as magnitude and phase on a polar plane.', interpret: 'Useful when transmission phase matters as much as amplitude. Loops and sharp turns indicate rapid phase or magnitude change.' },
+  'resistance-reactance': { what: 'Converts S11 into series-equivalent resistance R and reactance X at a 50 Ω reference impedance.', interpret: 'Near 50 Ω resistance and 0 Ω reactance indicates a match. Positive X is inductive; negative X is capacitive.' },
+  admittance: { what: 'Converts S11 into conductance G and susceptance B.', interpret: 'This is often easier than impedance for shunt networks. Positive B is capacitive; negative B is inductive.' },
+  phase: { what: 'Shows the phase angle of S11 and S21 in degrees.', interpret: 'Sharp phase rotation often accompanies a resonance. Phase becomes unreliable where the corresponding magnitude approaches zero.' },
+  vswr: { what: 'Expresses S11 mismatch as voltage standing-wave ratio.', interpret: '1:1 is ideal. Lower is better; common acceptance limits depend on the device and application.' },
+  's21-gain': { what: 'Shows transmitted S21 magnitude in decibels.', interpret: 'For a passive two-port, values below 0 dB indicate insertion loss. Ripple or narrow dips can reveal resonances or fixture effects.' },
+  's11-magnitude': { what: 'Shows the magnitude of the reflection coefficient |Γ| as a dimensionless ratio.', interpret: '0 is a perfect match and 1 is complete reflection. Reflected power fraction is |Γ|².' },
+  's11-z-magnitude': { what: 'Shows the magnitude of the impedance derived from S11.', interpret: 'Useful for overall scale, but it hides whether the impedance is resistive, inductive, or capacitive.' },
+  's11-components': { what: 'Shows the real and imaginary components of complex S11.', interpret: 'Use this when validating raw complex reflection data or comparing against another instrument or model.' },
+  's21-components': { what: 'Shows the real and imaginary components of complex S21.', interpret: 'Use this for raw complex transmission comparisons and calculations that need Cartesian data.' },
+  's11-group-delay': { what: 'Estimates S11 group delay from the frequency derivative of unwrapped reflection phase.', interpret: 'Large features can indicate stored energy or resonances, but results are unstable near deep S11 magnitude nulls.' },
+  's21-group-delay': { what: 'Estimates S21 group delay from the frequency derivative of unwrapped transmission phase.', interpret: 'Flat delay suggests more uniform phase response. Spikes may be real dispersion, a resonance, noise, or phase uncertainty near a transmission null.' },
+  'q-factor': { what: 'Calculates |X/R| from the impedance derived from S11.', interpret: 'This is a pointwise impedance ratio, not automatically the loaded or unloaded Q of a resonator.' },
+  capacitance: { what: 'Converts negative series reactance into an equivalent capacitance.', interpret: 'Values appear only where reactance is capacitive. The result assumes a series-equivalent model at each frequency.' },
+  inductance: { what: 'Converts positive series reactance into an equivalent inductance.', interpret: 'Values appear only where reactance is inductive. The result assumes a series-equivalent model at each frequency.' },
+  's21-series-z': { what: 'Estimates a series impedance from S21 using an ideal matched series-fixture model.', interpret: 'Use only when the DUT and fixture match that topology. It is not a general direct impedance measurement.' },
+  's21-shunt-z': { what: 'Estimates a shunt impedance from S21 using an ideal matched shunt-fixture model.', interpret: 'Use only when the DUT and fixture match that topology. Fixture parasitics can dominate at frequency extremes.' },
+};
+
+type PlotSuggestion = { mode: ViewMode; title: string; reason: string };
+
 const TRACE = { magenta: '#a9008b', yellow: '#e2aa00', cyan: '#009d9a', red: '#d7191c', green: '#20aa35', blue: '#173de3' };
 const DEFAULT_MARKER_COLORS = [TRACE.blue, TRACE.red, TRACE.green, TRACE.magenta, TRACE.yellow, TRACE.cyan];
 
@@ -165,6 +189,44 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function suggestPlots(points: SweepPoint[]): PlotSuggestion[] {
+  const suggestions: PlotSuggestion[] = [];
+  const validS11 = points.map((point, index) => ({ index, value: db(point.s11) })).filter((candidate) => Number.isFinite(candidate.value));
+  if (validS11.length) {
+    const bestCandidate = validS11.reduce((best, candidate) => candidate.value < best.value ? candidate : best);
+    const best = points[bestCandidate.index];
+    const z = impedance(best.s11);
+    const bestVswr = vswr(best.s11);
+    suggestions.push(
+      {
+        mode: 'return-loss',
+        title: 'S11 / S21 log magnitude',
+        reason: `The lowest measured S11 is ${formatNumber(bestCandidate.value, 2)} dB at ${formatFrequency(best.frequency)}. Start here to inspect the match and choose an application-appropriate bandwidth threshold.`,
+      },
+      {
+        mode: 'smith',
+        title: 'Smith chart',
+        reason: `At that frequency, the derived impedance is ${formatNumber(z.re, 1)} ${z.im < 0 ? '−' : '+'} j${formatNumber(Math.abs(z.im), 1)} Ω. Use the Smith chart to see the mismatch direction.`,
+      },
+      {
+        mode: 'vswr',
+        title: 'VSWR',
+        reason: `The best measured VSWR is ${Number.isFinite(bestVswr) ? `${formatNumber(bestVswr, 2)}:1` : 'infinite or non-passive'}. Infinite can mean complete reflection; |S11| above 1 can indicate an active DUT or a calibration error.`,
+      },
+    );
+  }
+  const s21Values = points.map((point) => db(point.s21)).filter(Number.isFinite);
+  if (s21Values.length) {
+    const { minimum, maximum } = s21Values.reduce((range, value) => ({ minimum: Math.min(range.minimum, value), maximum: Math.max(range.maximum, value) }), { minimum: Number.POSITIVE_INFINITY, maximum: Number.NEGATIVE_INFINITY });
+    suggestions.push({
+      mode: 's21-gain',
+      title: 'S21 gain / loss',
+      reason: `S21 spans ${formatNumber(minimum, 2)} to ${formatNumber(maximum, 2)} dB across this sweep. Check transmission loss, gain, and ripple here.`,
+    });
+  }
+  return suggestions;
+}
+
 function Chart({ mode, points, reference, markers, activeMarker, theme, onMarkerChange, onActiveMarkerChange, onModeChange }: {
   mode: ViewMode;
   points: SweepPoint[];
@@ -182,6 +244,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
   const pointPositionsRef = useRef<Array<{ x: number; y: number }>>([]);
   const draggingMarkerRef = useRef<number | null>(null);
   const [resizeVersion, setResizeVersion] = useState(0);
+  const [viewHelpOpen, setViewHelpOpen] = useState(false);
   const delayValues = useMemo(() => {
     if (mode === 's11-group-delay') return groupDelay(points, 's11');
     if (mode === 's21-group-delay') return groupDelay(points, 's21');
@@ -436,11 +499,17 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
         <select value={mode} onChange={(event) => onModeChange(event.target.value as ViewMode)} aria-label="Diagnostic view">
           {Object.entries(VIEW_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
+        <button className={`chart-help-button ${viewHelpOpen ? 'active' : ''}`} onClick={() => setViewHelpOpen((open) => !open)} aria-label={`Explain ${VIEW_LABELS[mode]}`} aria-expanded={viewHelpOpen}>?</button>
         <button onClick={savePng}>Save PNG</button>
       </div>
       <div className="chart-plot">
         <canvas className="trace-canvas" ref={canvasRef} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerEnd} onPointerCancel={handlePointerEnd} aria-label={VIEW_LABELS[mode]} />
         <canvas className="marker-canvas" ref={markerCanvasRef} aria-hidden="true" />
+        {viewHelpOpen && <aside className="chart-help-card">
+          <b>{VIEW_LABELS[mode]}</b>
+          <p>{VIEW_HELP[mode].what}</p>
+          <p>{VIEW_HELP[mode].interpret}</p>
+        </aside>}
         <div className="chart-trackers" aria-label={`${VIEW_LABELS[mode]} marker readouts`}>
           {markers.map((marker, index) => {
             const point = points[marker.index];
@@ -501,9 +570,11 @@ export default function App() {
   ]);
   const [activeMarker, setActiveMarker] = useState(0);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const bw = useMemo(() => bandwidth(points), [points]);
+  const plotSuggestions = useMemo(() => suggestPlots(points), [points]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -516,11 +587,15 @@ export default function App() {
   }, [points]);
 
   useEffect(() => {
-    if (!aboutOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setAboutOpen(false); };
+    if (!aboutOpen && !helpOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setAboutOpen(false);
+      setHelpOpen(false);
+    };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [aboutOpen]);
+  }, [aboutOpen, helpOpen]);
 
   function updateMarker(marker: number, index: number) {
     setMarkers((current) => current.map((item, candidate) => candidate === marker ? { ...item, index } : item));
@@ -559,6 +634,10 @@ export default function App() {
       return { ...marker, index };
     }));
     pointsRef.current = data;
+  }
+
+  function showSuggestedPlot(mode: ViewMode) {
+    setViews((current) => current.includes(mode) ? current : current.map((view, index) => index === current.length - 1 ? mode : view));
   }
 
   async function toggleConnection() {
@@ -640,7 +719,7 @@ export default function App() {
 
   return (
     <main className="application">
-      <div className="window-title"><span>NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} raw points</span><button className="theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} mode`}>{theme === 'light' ? 'Dark' : 'Light'}</button></div>
+      <div className="window-title"><span>NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} raw points</span><div className="window-actions"><button onClick={() => setHelpOpen(true)}>Help</button><button className="theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} mode`}>{theme === 'light' ? 'Dark' : 'Light'}</button></div></div>
       <div className="main-grid">
         <aside className="controls-column">
           <fieldset><legend>Sweep control</legend>
@@ -672,6 +751,13 @@ export default function App() {
         </aside>
 
         <section className="readouts-column">
+          <fieldset className="analysis-guide"><legend>Suggested views</legend>
+            {plotSuggestions.map((suggestion) => <article className="plot-suggestion" key={suggestion.mode}>
+              <div><b>{suggestion.title}</b><p>{suggestion.reason}</p></div>
+              <button onClick={() => showSuggestedPlot(suggestion.mode)} disabled={views.includes(suggestion.mode)}>{views.includes(suggestion.mode) ? 'Shown' : 'Show'}</button>
+            </article>)}
+            <small>These are descriptive checks from the loaded samples, not pass/fail judgments.</small>
+          </fieldset>
           {markers.map((marker, index) => <MarkerReadout key={marker.id} point={points[marker.index]} number={index + 1} />)}
           <fieldset><legend>Trace colors</legend><div className="trace-key"><span style={{ color: TRACE.magenta }}>━ S11</span><span style={{ color: TRACE.yellow }}>━ S21</span><span style={{ color: TRACE.cyan }}>━ Resistance / conductance</span><span style={{ color: TRACE.red }}>━ Reactance / susceptance</span></div></fieldset>
         </section>
@@ -681,6 +767,18 @@ export default function App() {
         </section>
       </div>
       <div className="statusbar"><span>{message}</span><span className="status-actions"><a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a><button onClick={() => setAboutOpen(true)}>About</button></span></div>
+      {helpOpen && <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}>
+        <section className="about-dialog help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="about-titlebar"><h2 id="help-title">Measurement guide</h2><button onClick={() => setHelpOpen(false)}>Close</button></div>
+          <div className="about-content help-content">
+            <section><h3>First measurement</h3><p>Connect the NanoVNA and set the intended sweep range. Calibrate with the appropriate standards at the reference plane, including the cables and adapters that will remain in the setup. Then connect the DUT and run the sweep.</p></section>
+            <section><h3>S11 and S21</h3><p><b>S11</b> describes reflection at port 1. A more-negative S11 log magnitude generally means a better match. <b>S21</b> describes transmission from port 1 to port 2 and is meaningful for two-port or through measurements.</p></section>
+            <section><h3>Where to start</h3><p>Use log magnitude to locate matching and transmission features, VSWR for a simple mismatch reading, and the Smith chart or R/X plot to understand what kind of impedance correction may be needed. Confirm a suspected resonance with impedance and phase behavior.</p></section>
+            <section><h3>Markers and references</h3><p>Drag markers directly on any plot. Marker frequency snaps to an acquired sample; most readouts are calculated from that sample, while group delay uses neighboring phase samples. A reference sweep helps compare a later measurement against a baseline; it does not calibrate the instrument.</p></section>
+            <section><h3>Derived views</h3><p>Impedance, admittance, equivalent component values, and group delay are calculated from S-parameters. They depend on calibration and model assumptions. Group delay uses neighboring phase samples and can become unstable near a deep magnitude null.</p></section>
+          </div>
+        </section>
+      </div>}
       {aboutOpen && <div className="modal-backdrop" onMouseDown={() => setAboutOpen(false)}>
         <section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="about-titlebar"><h2 id="about-title">NanoVNA Web</h2><button onClick={() => setAboutOpen(false)}>Close</button></div>

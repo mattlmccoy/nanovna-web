@@ -12,6 +12,8 @@ Browser interface for NanoVNA devices.
 - Raw device samples with no smoothing, curve fitting, or hidden resampling
 - Addable/removable markers with selectable colors, real-time plot dragging, and frequency, impedance, admittance, S11, reflected-power, S21, phase, and VSWR readouts
 - Plot-local live marker strips with diagnostic-specific quantities and units
+- Deterministic suggested-view guidance derived from the loaded samples
+- Beginner measurement guide and contextual interpretation notes for every diagnostic view
 - Capturable reference sweep overlaid as a dashed trace
 - Four configurable diagnostic panes
 - Persistent light/dark mode with system preference detection
