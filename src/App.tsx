@@ -304,6 +304,10 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
       ctx.beginPath(); ctx.moveTo(cx - radius, cy); ctx.lineTo(cx + radius, cy); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx, cy - radius); ctx.lineTo(cx, cy + radius); ctx.stroke();
       if (mode === 'smith') {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.clip();
         [0.2, 0.5, 1, 2, 5].forEach((r) => {
           const center = cx + radius * r / (1 + r);
           const circleRadius = radius / (1 + r);
@@ -316,6 +320,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
             ctx.beginPath(); ctx.arc(cx + radius, cy + sign * circleRadius, circleRadius, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
           });
         });
+        ctx.restore();
       } else {
         [0.25, 0.5, 0.75].forEach((r) => { ctx.beginPath(); ctx.arc(cx, cy, radius * r, 0, Math.PI * 2); ctx.stroke(); });
         for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) { ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius); ctx.stroke(); }
