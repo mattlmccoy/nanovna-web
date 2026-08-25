@@ -60,7 +60,9 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .chart-help-card { position: absolute; z-index: 3; left: 7px; bottom: 7px; width: min(330px, calc(100% - 14px)); padding: 9px 11px; border: 1px solid #999995; border-radius: 3px; background: rgba(248,248,245,.96); box-shadow: 0 4px 16px rgba(0,0,0,.16); font-size: 10px; line-height: 1.4; }
 .chart-help-card b { font-size: 10px; letter-spacing: .03em; }
 .chart-help-card p { margin: 5px 0 0; }
-.analysis-guide { border-top: 3px solid var(--yellow); }
+.analysis-guide { margin-top: auto; border: 1px solid var(--edge); border-top: 3px solid var(--yellow); border-radius: 3px; background: var(--surface); }
+.analysis-guide summary { padding: 8px 10px; cursor: pointer; color: #4c4c48; font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; user-select: none; }
+.analysis-guide-content { padding: 2px 10px 10px; }
 .plot-suggestion { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 8px; padding: 7px 0; border-bottom: 1px solid #d0d0cc; }
 .plot-suggestion:first-of-type { padding-top: 1px; }
 .plot-suggestion:last-of-type { border-bottom: 0; }
@@ -145,6 +147,8 @@ html[data-theme='dark'] .chart-tracker.active { background: rgba(241,213,28,.14)
 html[data-theme='dark'] .chart-help-card { color: #deded9; border-color: #5b5d61; background: rgba(35,36,39,.96); box-shadow: 0 4px 18px rgba(0,0,0,.48); }
 html[data-theme='dark'] .plot-suggestion { border-color: #484a4d; }
 html[data-theme='dark'] .plot-suggestion p { color: #b8b9b5; }
+html[data-theme='dark'] .analysis-guide { border-color: #44464a; background: #2b2c2f; }
+html[data-theme='dark'] .analysis-guide summary { color: #bfc0bc; }
 html[data-theme='dark'] .statusbar { color: #cacac5; border-color: #0f1012; background: linear-gradient(#303134, #222326); box-shadow: inset 0 1px rgba(255,255,255,.06); }
 html[data-theme='dark'] .about-dialog { color: #deded9; border-color: #101113; background: #292a2d; box-shadow: 0 18px 55px rgba(0,0,0,.72), inset 0 1px rgba(255,255,255,.07); }
 html[data-theme='dark'] .about-titlebar { border-color: #111214; background: linear-gradient(#3b3c40, #28292c); }

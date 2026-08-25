@@ -809,15 +809,18 @@ export default function App() {
         </aside>
 
         <section className="readouts-column">
-          <fieldset className="analysis-guide"><legend>Suggested views</legend>
+          {markers.map((marker, index) => <MarkerReadout key={marker.id} point={points[marker.index]} number={index + 1} />)}
+          <fieldset><legend>Trace colors</legend><div className="trace-key"><span style={{ color: TRACE.magenta }}>━ S11</span><span style={{ color: TRACE.yellow }}>━ S21</span><span style={{ color: TRACE.cyan }}>━ Resistance / conductance</span><span style={{ color: TRACE.red }}>━ Reactance / susceptance</span></div></fieldset>
+          <details className="analysis-guide">
+            <summary>Suggested views</summary>
+            <div className="analysis-guide-content">
             {plotSuggestions.map((suggestion) => <article className="plot-suggestion" key={suggestion.mode}>
               <div><b>{suggestion.title}</b><p>{suggestion.reason}</p></div>
               <button onClick={() => showSuggestedPlot(suggestion.mode)} disabled={views.includes(suggestion.mode)}>{views.includes(suggestion.mode) ? 'Shown' : 'Show'}</button>
             </article>)}
             <small>These are descriptive checks from the loaded samples, not pass/fail judgments.</small>
-          </fieldset>
-          {markers.map((marker, index) => <MarkerReadout key={marker.id} point={points[marker.index]} number={index + 1} />)}
-          <fieldset><legend>Trace colors</legend><div className="trace-key"><span style={{ color: TRACE.magenta }}>━ S11</span><span style={{ color: TRACE.yellow }}>━ S21</span><span style={{ color: TRACE.cyan }}>━ Resistance / conductance</span><span style={{ color: TRACE.red }}>━ Reactance / susceptance</span></div></fieldset>
+            </div>
+          </details>
         </section>
 
         <section className="charts-grid">
