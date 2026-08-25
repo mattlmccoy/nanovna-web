@@ -116,12 +116,13 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange, onModeChange }: {
+function Chart({ mode, points, reference, markers, activeMarker, theme, onMarkerChange, onModeChange }: {
   mode: ViewMode;
   points: SweepPoint[];
   reference: SweepPoint[] | null;
   markers: Marker[];
   activeMarker: number;
+  theme: 'light' | 'dark';
   onMarkerChange: (marker: number, index: number) => void;
   onModeChange: (mode: ViewMode) => void;
 }) {
@@ -140,7 +141,10 @@ function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange,
     ctx.scale(ratio, ratio);
     const width = bounds.width;
     const height = bounds.height;
-    ctx.fillStyle = '#ffffff';
+    const dark = theme === 'dark';
+    const canvasGrid = dark ? '#4a4c50' : '#c8c8c8';
+    const canvasText = dark ? '#d9d9d5' : '#333333';
+    ctx.fillStyle = dark ? '#17181a' : '#ffffff';
     ctx.fillRect(0, 0, width, height);
     ctx.font = '10px Arial, sans-serif';
     ctx.lineWidth = 1;
@@ -169,7 +173,7 @@ function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange,
       ctx.lineTo(position.x + 5, position.y - 9);
       ctx.closePath();
       ctx.fill();
-      ctx.fillStyle = '#111';
+      ctx.fillStyle = dark ? '#f1f1ed' : '#111';
       ctx.fillText(`M${label + 1}`, position.x + 6, position.y - 4);
     };
 
@@ -177,7 +181,7 @@ function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange,
       const radius = Math.min(area.w, area.h) * 0.46;
       const cx = area.x + area.w / 2;
       const cy = area.y + area.h / 2;
-      ctx.strokeStyle = '#a7a7a7';
+      ctx.strokeStyle = dark ? '#5f6268' : '#a7a7a7';
       ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx - radius, cy); ctx.lineTo(cx + radius, cy); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx, cy - radius); ctx.lineTo(cx, cy + radius); ctx.stroke();
@@ -202,7 +206,7 @@ function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange,
       const positions = points.map((point) => ({ x: cx + point[channel].re * radius, y: cy - point[channel].im * radius }));
       if (reference?.length) {
         const referencePositions = reference.map((point) => ({ x: cx + point[channel].re * radius, y: cy - point[channel].im * radius }));
-        ctx.setLineDash([4, 3]); line(referencePositions, '#777777'); ctx.setLineDash([]);
+        ctx.setLineDash([4, 3]); line(referencePositions, dark ? '#b0b0aa' : '#777777'); ctx.setLineDash([]);
       }
       line(positions, mode === 'smith' ? TRACE.magenta : TRACE.yellow);
       markers.forEach((marker, index) => drawMarker(marker.index, marker.color, positions[marker.index], index));
@@ -243,8 +247,8 @@ function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange,
     if (mode === 'inductance') { const values = points.map((point) => { const x = impedance(point.s11).im; return x > 0 ? x / (2 * Math.PI * point.frequency) * 1e9 : Number.NaN; }); min = 0; max = Math.max(100, ...values.filter(Number.isFinite)); series = [{ values, color: TRACE.yellow, label: 'L', unit: 'nH' }]; }
     if (mode === 's21-series-z' || mode === 's21-shunt-z') { const z = points.map((point) => s21Impedance(point.s21, mode === 's21-shunt-z')); const extent = Math.max(100, ...z.flatMap((value) => [Math.abs(value.re), Math.abs(value.im)]).filter(Number.isFinite)); min = -extent; max = extent; series = [{ values: z.map((value) => value.re), color: TRACE.cyan, label: 'R', unit: 'Ω' }, { values: z.map((value) => value.im), color: TRACE.red, label: 'X', unit: 'Ω' }]; }
 
-    ctx.strokeStyle = '#c8c8c8';
-    ctx.fillStyle = '#333';
+    ctx.strokeStyle = canvasGrid;
+    ctx.fillStyle = canvasText;
     for (let i = 0; i <= 5; i += 1) {
       const y = area.y + area.h * i / 5;
       ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
@@ -271,8 +275,8 @@ function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange,
         x: area.x + area.w * (reference[index].frequency - points[0].frequency) / Math.max(1, points.at(-1)!.frequency - points[0].frequency),
         y: area.y + area.h * (max - Math.max(min, Math.min(max, value))) / (max - min),
       }));
-      ctx.setLineDash([4, 3]); line(positions, '#777777'); ctx.setLineDash([]);
-      ctx.fillStyle = '#555'; ctx.fillText('Ref', area.x + area.w - 24, 6);
+      ctx.setLineDash([4, 3]); line(positions, dark ? '#b0b0aa' : '#777777'); ctx.setLineDash([]);
+      ctx.fillStyle = dark ? '#c7c7c2' : '#555'; ctx.fillText('Ref', area.x + area.w - 24, 6);
     }
     markers.forEach((marker, index) => {
       const position = positionsBySeries[0][marker.index];
@@ -281,10 +285,10 @@ function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange,
     series.forEach((item, index) => {
       ctx.fillStyle = item.color;
       ctx.fillRect(area.x + index * 86, 2, 12, 2);
-      ctx.fillStyle = '#222';
+      ctx.fillStyle = dark ? '#deded9' : '#222';
       ctx.fillText(`${item.label} (${item.unit})`, area.x + 16 + index * 86, 6);
     });
-  }, [activeMarker, markers, mode, points, reference]);
+  }, [activeMarker, markers, mode, points, reference, theme]);
 
   function selectNearest(event: React.MouseEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
@@ -374,7 +378,14 @@ export default function App() {
   ]);
   const [activeMarker, setActiveMarker] = useState(0);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const bw = useMemo(() => bandwidth(points), [points]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('nanovna-theme', theme);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1d1e20' : '#cfcfcd');
+  }, [theme]);
 
   function updateMarker(marker: number, index: number) {
     setMarkers((current) => current.map((item, candidate) => candidate === marker ? { ...item, index } : item));
@@ -469,7 +480,7 @@ export default function App() {
 
   return (
     <main className="application">
-      <div className="window-title">NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} raw points</div>
+      <div className="window-title"><span>NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} raw points</span><button className="theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} mode`}>{theme === 'light' ? 'Dark' : 'Light'}</button></div>
       <div className="main-grid">
         <aside className="controls-column">
           <fieldset><legend>Sweep control</legend>
@@ -499,7 +510,7 @@ export default function App() {
         </section>
 
         <section className="charts-grid">
-          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} onMarkerChange={updateMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
+          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} onMarkerChange={updateMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
         </section>
       </div>
       <div className="statusbar"><span>{message}</span><span>Units shown on every readout · device data remains local</span></div>
