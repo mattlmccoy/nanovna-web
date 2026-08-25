@@ -11,7 +11,7 @@ Browser interface for NanoVNA devices.
 - Single and truncated-mean sweep averaging with processing provenance in plot and Touchstone exports
 - Linear or logarithmic segmented sweep spacing and compatible firmware-advertised measurement-bandwidth control
 - Delta markers against another marker or the reference sweep
-- Hidden impedance-sonification mode with a dedicated silence reference, signed-reactance pitch mapping, impedance-change loudness mapping, stale-data muting, and hard audio limits (Option/Alt + Shift + M)
+- Hidden Theremin mode with a dedicated silence reference, signed-reactance pitch mapping, impedance-change loudness mapping, stale-data muting, hard audio limits, and approximately time-aligned generated-audio/telemetry test recording (Option/Alt + Shift + M)
 - Firmware capability detection and device-reported calibration-state readout when supported
 - NanoVNA shell support for `version`, `help`, `sweep`, `scan`, `frequencies`, `data 0`, and `data 1`
 - Multi-segment S11/S21 sweeps

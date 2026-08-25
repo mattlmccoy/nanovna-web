@@ -723,6 +723,7 @@ export default function App() {
   const [displayOpen, setDisplayOpen] = useState(false);
   const [instrumentOpen, setInstrumentOpen] = useState(false);
   const [instrumentReference, setInstrumentReference] = useState<InstrumentReference | null>(null);
+  const [thereminRecording, setThereminRecording] = useState(false);
   const [comparisonDatasets, setComparisonDatasets] = useState<ComparisonDataset[]>([]);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
   const [suggestedPane, setSuggestedPane] = useState(0);
@@ -756,12 +757,13 @@ export default function App() {
         const target = event.target as HTMLElement | null;
         if (target?.matches('input, select, textarea, [contenteditable="true"]')) return;
         event.preventDefault();
+        if (thereminRecording) { setMessage('Stop the Theremin test recording before hiding Theremin mode.'); return; }
         setInstrumentOpen((current) => !current);
       }
     };
     window.addEventListener('keydown', toggleInstrument);
     return () => window.removeEventListener('keydown', toggleInstrument);
-  }, []);
+  }, [thereminRecording]);
 
   useEffect(() => {
     pointsRef.current = points;
@@ -1171,7 +1173,7 @@ export default function App() {
             <button className="wide" onClick={() => setTdrOpen(true)}>Time Domain Reflectometry…</button>
           </fieldset>
           <fieldset><legend>Reference sweep</legend><button className="wide" onClick={() => setReference(points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })))}>Set current as reference</button><button className="wide" onClick={() => setReference(null)} disabled={!reference}>Clear reference</button><small>{reference ? `${reference.length} reference points · dashed gray trace` : 'No reference trace loaded'}</small></fieldset>
-          {instrumentOpen && <InstrumentPanel points={points} markerIndex={markers[activeMarker]?.index ?? 0} reference={instrumentReference} currentContext={{ device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel }} dataFresh={connected && !busy && sourceInfo.sourceKind === 'device' && !followStatus.startsWith('Stale')} onCaptureReference={() => { setInstrumentReference({ points: points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })), device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel }); setMessage('Instrument silence reference captured from a fresh complete sweep. Start audio, then move or touch the sensed object.'); }} onClose={() => setInstrumentOpen(false)} />}
+          {instrumentOpen && <InstrumentPanel points={points} markerIndex={markers[activeMarker]?.index ?? 0} reference={instrumentReference} currentContext={{ device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel }} dataFresh={connected && !busy && sourceInfo.sourceKind === 'device' && !followStatus.startsWith('Stale')} onCaptureReference={() => { setInstrumentReference({ points: points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })), device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel }); setMessage('Theremin silence reference captured from a fresh complete sweep. Start audio, then move or touch the sensing plate.'); }} onRecordingChange={setThereminRecording} onClose={() => setInstrumentOpen(false)} />}
           <fieldset><legend>Serial port control</legend>
             <div className={`serial-status ${connected ? 'online' : ''}`}>{connected ? `Connected · 115200 baud` : 'No serial port connected'}</div>
             <label className="check-row"><input type="checkbox" checked={followDevice} onChange={(event) => { setFollowDevice(event.target.checked); setFollowStatus(event.target.checked ? 'Starting…' : 'Inactive'); }} disabled={!connected || busy || !capabilities.currentData} /> Follow current device buffers</label>
@@ -1265,7 +1267,7 @@ export default function App() {
             <h3>Credits</h3>
             <p>This is a separate browser implementation. Its protocol behavior and feature design were informed by <a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a>, created by Rune B. Broberg and maintained by its contributors.</p>
             <p><a href="https://github.com/mattlmccoy/nanovna-web" target="_blank" rel="noreferrer">Source and notices</a></p>
-            <p><button onClick={() => { setInstrumentOpen(true); setAboutOpen(false); }}>Instrument mode</button> <small>Shortcut: Option/Alt + Shift + M</small></p>
+            <p><button onClick={() => { setInstrumentOpen(true); setAboutOpen(false); }}>Theremin mode</button> <small>Shortcut: Option/Alt + Shift + M</small></p>
           </div>
         </section>
       </div>}
