@@ -1,0 +1,55 @@
+:root { font-family: Arial, Helvetica, sans-serif; color: #171717; background: #d9d9d9; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: #d9d9d9; font-size: 12px; }
+button, input, select { font: inherit; color: inherit; }
+button, input, select { min-height: 25px; border: 1px solid #9c9c9c; border-radius: 2px; background: linear-gradient(#fff, #e7e7e7); }
+button { padding: 3px 9px; cursor: pointer; }
+button:hover:not(:disabled) { background: linear-gradient(#fff, #d8e9f7); border-color: #6289a8; }
+button:disabled { color: #888; cursor: default; }
+input, select { padding: 3px 6px; background: #fff; }
+.application { min-height: 100vh; display: flex; flex-direction: column; background: #ededed; }
+.window-title { height: 34px; padding: 9px 12px; border-bottom: 1px solid #a0a0a0; background: linear-gradient(#fafafa, #dedede); font-size: 12px; }
+.main-grid { flex: 1; display: grid; grid-template-columns: 250px 332px minmax(580px, 1fr); gap: 6px; padding: 7px; min-height: 0; }
+.controls-column, .readouts-column { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+fieldset { min-width: 0; margin: 0; padding: 9px; border: 1px solid #b8b8b8; background: #e9e9e9; }
+legend { padding: 0 5px; font-weight: 600; }
+.form-grid { display: grid; grid-template-columns: 1fr 1.2fr; align-items: center; gap: 6px 8px; }
+.form-grid input, .form-grid select { width: 100%; text-align: right; }
+.wide { width: 100%; margin-top: 7px; }
+.progress { height: 11px; margin-top: 8px; border: 1px solid #aaa; background: white; }
+.progress i { display: block; height: 100%; background: #2f76c2; }
+.marker-control { display: grid; grid-template-columns: 58px minmax(0, 1fr) 13px 18px; align-items: center; gap: 5px; margin-bottom: 5px; }
+.marker-control input[type='radio'] { min-height: 0; margin: 0; }
+.marker-control span { width: 12px; height: 18px; border: 1px solid #777; }
+small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
+.summary { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; }
+.summary b { font-weight: 400; text-align: right; }
+.serial-status { margin-bottom: 7px; padding: 6px; border: 1px inset #bbb; background: #f7f7f7; color: #666; }
+.serial-status.online { color: #067723; background: #effbef; }
+.marker-readout > div { display: grid; grid-template-columns: 104px 1fr; gap: 7px; margin: 4px 0; }
+.marker-readout b { overflow: hidden; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.trace-key { display: grid; gap: 5px; font-weight: 600; }
+.charts-grid { display: grid; min-width: 0; min-height: 0; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(280px, 1fr) minmax(280px, 1fr); gap: 6px; }
+.chart-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid #b9b9b9; background: white; }
+.chart-titlebar { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 4px; border-bottom: 1px solid #c7c7c7; background: #ededed; }
+.chart-titlebar select { min-width: 0; flex: 1; }
+.chart-titlebar button { white-space: nowrap; }
+.chart-panel canvas { width: 100%; height: 100%; min-height: 240px; cursor: crosshair; }
+.statusbar { min-height: 27px; display: flex; justify-content: space-between; gap: 20px; padding: 6px 9px; border-top: 1px solid #aaa; background: linear-gradient(#eee, #d6d6d6); color: #333; }
+
+@media (max-width: 1180px) {
+  .main-grid { grid-template-columns: 230px 300px minmax(470px, 1fr); }
+  .charts-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, 310px); overflow: auto; }
+}
+
+@media (max-width: 860px) {
+  .main-grid { display: flex; flex-direction: column; }
+  .controls-column, .readouts-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .charts-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, 320px); overflow: visible; }
+  .statusbar { flex-direction: column; gap: 3px; }
+}
+
+@media (max-width: 560px) {
+  .controls-column, .readouts-column { grid-template-columns: 1fr; }
+  .charts-grid { grid-template-rows: repeat(4, 290px); }
+}
