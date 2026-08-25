@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { NanoVNAConnection } from './lib/nanovna';
+import { NanoVNAConnection, type CalibrationStep, type NanoVNACapabilities } from './lib/nanovna';
 import { parseMeasurementFile } from './lib/files';
 import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, phase, reflectedPowerPercent, type Complex, type SweepPoint, vswr } from './lib/rf';
 import { ComparisonMode, type ComparisonDataset } from './components/ComparisonMode';
@@ -56,6 +56,14 @@ type PlotSuggestion = { mode: ViewMode; title: string; reason: string };
 
 const TRACE = { magenta: '#a9008b', yellow: '#e2aa00', cyan: '#009d9a', red: '#d7191c', green: '#20aa35', blue: '#173de3' };
 const DEFAULT_MARKER_COLORS = [TRACE.blue, TRACE.red, TRACE.green, TRACE.magenta, TRACE.yellow, TRACE.cyan];
+const EMPTY_CAPABILITIES: NanoVNACapabilities = { scan: false, scanMask: false, calibration: false, calibrationSlots: false, pauseResume: false, bandwidth: false };
+const CALIBRATION_STEPS: Array<{ key: CalibrationStep; title: string; instruction: string; requiredFor: 'one-port' | 'two-port' }> = [
+  { key: 'open', title: 'OPEN', instruction: 'Connect the OPEN standard to port 1 at the intended reference plane.', requiredFor: 'one-port' },
+  { key: 'short', title: 'SHORT', instruction: 'Connect the SHORT standard to port 1 at the same reference plane.', requiredFor: 'one-port' },
+  { key: 'load', title: 'LOAD', instruction: 'Connect the 50 Ω LOAD standard to port 1 at the same reference plane.', requiredFor: 'one-port' },
+  { key: 'isoln', title: 'ISOLATION', instruction: 'Terminate both ports in 50 Ω loads for the isolation measurement.', requiredFor: 'two-port' },
+  { key: 'thru', title: 'THRU', instruction: 'Connect the THRU standard directly between ports 1 and 2.', requiredFor: 'two-port' },
+];
 
 function parseFrequency(value: string): number {
   const match = value.trim().match(/^([0-9]*\.?[0-9]+)\s*([kKmMgG]?)\s*(?:[hH][zZ])?$/);
@@ -611,6 +619,11 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [firmware, setFirmware] = useState('No device');
   const [calibrationState, setCalibrationState] = useState('Unknown');
+  const [capabilities, setCapabilities] = useState<NanoVNACapabilities>(EMPTY_CAPABILITIES);
+  const [calibrationOpen, setCalibrationOpen] = useState(false);
+  const [calibrationStarted, setCalibrationStarted] = useState(false);
+  const [calibrationCompleted, setCalibrationCompleted] = useState<CalibrationStep[]>([]);
+  const [calibrationSlot, setCalibrationSlot] = useState(0);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [continuous, setContinuous] = useState(false);
@@ -628,6 +641,7 @@ export default function App() {
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [comparisonDatasets, setComparisonDatasets] = useState<ComparisonDataset[]>([]);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
+  const [suggestedPane, setSuggestedPane] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const bw = useMemo(() => bandwidth(points), [points]);
   const plotSuggestions = useMemo(() => suggestPlots(points), [points]);
@@ -643,15 +657,16 @@ export default function App() {
   }, [points]);
 
   useEffect(() => {
-    if (!aboutOpen && !helpOpen) return;
+    if (!aboutOpen && !helpOpen && !calibrationOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       setAboutOpen(false);
       setHelpOpen(false);
+      if (!busy) setCalibrationOpen(false);
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [aboutOpen, helpOpen]);
+  }, [aboutOpen, busy, calibrationOpen, helpOpen]);
 
   function updateMarker(marker: number, index: number) {
     setMarkers((current) => current.map((item, candidate) => candidate === marker ? { ...item, index } : item));
@@ -692,8 +707,8 @@ export default function App() {
     pointsRef.current = data;
   }
 
-  function showSuggestedPlot(mode: ViewMode) {
-    setViews((current) => current.includes(mode) ? current : current.map((view, index) => index === current.length - 1 ? mode : view));
+  function showSuggestedPlot(mode: ViewMode, pane: number) {
+    setViews((current) => current.map((view, index) => index === pane ? mode : view));
   }
 
   async function toggleConnection() {
@@ -703,6 +718,10 @@ export default function App() {
       setConnected(false);
       setFirmware('No device');
       setCalibrationState('Unknown');
+      setCapabilities(EMPTY_CAPABILITIES);
+      setCalibrationOpen(false);
+      setCalibrationStarted(false);
+      setCalibrationCompleted([]);
       setMessage('Disconnected. Existing measurement remains displayed.');
       return;
     }
@@ -719,7 +738,10 @@ export default function App() {
       setConnected(true);
       setFirmware(version);
       setCalibrationState(connection.calibration);
-      setMessage(`Connected at 115200 baud · ${version}`);
+      setCapabilities(connection.capabilities);
+      setCalibrationStarted(false);
+      setCalibrationCompleted([]);
+      setMessage(`Connected at 115200 baud · ${version} · ${connection.capabilities.calibration ? 'device calibration controls available' : 'calibration commands not advertised'}.`);
     } catch (error) { setMessage(`Connection failed: ${(error as Error).message}`); }
     finally { setBusy(false); }
   }
@@ -727,24 +749,136 @@ export default function App() {
   async function runSweep() {
     if (!connectionRef.current || !connected) { setMessage('Connect a NanoVNA before starting a live sweep.'); return; }
     setBusy(true); setProgress(0); stopRequestedRef.current = false;
+    let retainedPartial: SweepPoint[] = [];
+    let retainedSegments = 0;
     try {
       do {
+        retainedPartial = [];
+        retainedSegments = 0;
         setProgress(0);
-        const data = await connectionRef.current.sweep(parseFrequency(start), parseFrequency(stop), pointCount, segments, setProgress, () => stopRequestedRef.current);
-        if (data.length) {
-          setPoints(data);
-          remapMarkersToFrequencies(data);
-          setSourceInfo({ sourceName: `${firmware} live sweep`, sourceKind: 'device', device: firmware, calibration: calibrationState });
-          setMessage(`Sweep complete · ${data.length} samples · browser smoothing OFF · device calibration: ${calibrationState}.`);
+        const calibrationAtAcquisition = calibrationState;
+        const result = await connectionRef.current.sweep(parseFrequency(start), parseFrequency(stop), pointCount, segments, (update) => {
+          retainedPartial = update.points;
+          retainedSegments = update.completedSegments;
+          setProgress(update.progress);
+          setPoints(update.points);
+          remapMarkersToFrequencies(update.points);
+          setSourceInfo({ sourceName: `${firmware} live sweep`, sourceKind: 'device', device: firmware, calibration: calibrationAtAcquisition });
+          setMessage(`Live sweep · segment ${update.completedSegments} of ${update.totalSegments} · ${update.points.length} samples displayed.`);
+        }, () => stopRequestedRef.current);
+        if (result.points.length) {
+          setMessage(result.complete
+            ? `Sweep complete · ${result.points.length} samples · browser smoothing OFF · device calibration: ${calibrationAtAcquisition}.`
+            : `Partial sweep stopped · ${result.completedSegments} of ${result.totalSegments} segments · ${result.points.length} samples retained and labeled partial.`);
+          setSourceInfo({ sourceName: `${firmware} ${result.complete ? 'live sweep' : 'partial sweep'}`, sourceKind: 'device', device: firmware, calibration: calibrationAtAcquisition });
+        } else if (result.cancelled) {
+          setMessage('Sweep stopped before the first segment completed. Existing measurement remains displayed.');
         }
       } while (continuous && !stopRequestedRef.current);
-    } catch (error) { setMessage(`Sweep failed: ${(error as Error).message}`); }
+    } catch (error) {
+      const detail = (error as Error).message;
+      if (retainedPartial.length) {
+        setSourceInfo({ sourceName: `${firmware} incomplete sweep`, sourceKind: 'device', device: firmware, calibration: calibrationState });
+        setMessage(`Sweep failed after ${retainedSegments} segment${retainedSegments === 1 ? '' : 's'}; ${retainedPartial.length} retained samples are incomplete. ${detail}`);
+      } else setMessage(`Sweep failed: ${detail}`);
+      if (/serial|connection|closed|timed out|not connected/i.test(detail)) {
+        await connectionRef.current?.disconnect();
+        connectionRef.current = null;
+        setConnected(false);
+        setFirmware('No device');
+        setCapabilities(EMPTY_CAPABILITIES);
+        setCalibrationState('Unknown');
+        setCalibrationOpen(false);
+        setCalibrationStarted(false);
+        setCalibrationCompleted([]);
+      }
+    }
     finally { setBusy(false); }
   }
 
   function stopSweep() {
     stopRequestedRef.current = true;
     setMessage('Stopping after the current device response…');
+  }
+
+  async function beginCalibration() {
+    if (!connectionRef.current || !window.confirm('Reset the active in-memory device calibration? This cannot be undone unless it was already saved to a NanoVNA slot. Save the current calibration first if you may need it.')) return;
+    setBusy(true);
+    try {
+      const state = await connectionRef.current.resetCalibration();
+      setCalibrationState(state);
+      setCalibrationStarted(true);
+      setCalibrationCompleted([]);
+      setMessage('Device calibration reset. Measure OPEN, SHORT, and LOAD before applying correction.');
+    } catch (error) { setMessage(`Calibration reset failed: ${(error as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  async function measureCalibrationStep(step: CalibrationStep) {
+    if (!connectionRef.current) return;
+    setBusy(true);
+    const label = CALIBRATION_STEPS.find((item) => item.key === step)?.title ?? step.toUpperCase();
+    setMessage(`Measuring ${label} across ${start} to ${stop}…`);
+    try {
+      const result = await connectionRef.current.collectCalibration(step, parseFrequency(start), parseFrequency(stop), pointCount);
+      setPoints(result.points);
+      remapMarkersToFrequencies(result.points);
+      setCalibrationState(result.state);
+      setCalibrationCompleted((current) => current.includes(step) ? current : [...current, step]);
+      setSourceInfo({ sourceName: `${label} calibration standard`, sourceKind: 'device', device: firmware, calibration: result.state });
+      setMessage(`${label} collected · ${result.points.length} samples · device state: ${result.state}.`);
+    } catch (error) { setMessage(`${label} measurement failed: ${(error as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  async function finishCalibration(twoPort: boolean) {
+    if (!connectionRef.current) return;
+    const required: CalibrationStep[] = twoPort ? ['open', 'short', 'load', 'isoln', 'thru'] : ['open', 'short', 'load'];
+    const missing = required.filter((step) => !calibrationCompleted.includes(step));
+    if (missing.length) { setMessage(`Calibration cannot be applied: measure ${missing.join(', ').toUpperCase()} first.`); return; }
+    setBusy(true);
+    try {
+      const state = await connectionRef.current.finishCalibration();
+      setCalibrationState(state);
+      setCalibrationOpen(false);
+      setCalibrationStarted(false);
+      setCalibrationCompleted([]);
+      setMessage(`${twoPort ? 'Two-port' : 'One-port'} device calibration applied. Save it to a slot if you want it retained on the NanoVNA.`);
+    } catch (error) { setMessage(`Calibration apply failed: ${(error as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  async function setDeviceCalibrationEnabled(enabled: boolean) {
+    if (!connectionRef.current) return;
+    setBusy(true);
+    try {
+      const state = await connectionRef.current.setCalibrationEnabled(enabled);
+      setCalibrationState(state);
+      setMessage(`Device calibration correction ${enabled ? 'enabled' : 'disabled'} · ${state}.`);
+    } catch (error) { setMessage(`Calibration command failed: ${(error as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  async function saveCalibrationSlot() {
+    if (!connectionRef.current || !window.confirm(`Overwrite NanoVNA calibration slot ${calibrationSlot}?`)) return;
+    setBusy(true);
+    try {
+      const state = await connectionRef.current.saveCalibrationSlot(calibrationSlot);
+      setCalibrationState(state);
+      setMessage(`Device calibration saved to slot ${calibrationSlot} · ${state}.`);
+    } catch (error) { setMessage(`Calibration save failed: ${(error as Error).message}`); }
+    finally { setBusy(false); }
+  }
+
+  async function recallCalibrationSlot() {
+    if (!connectionRef.current || !window.confirm(`Recall NanoVNA calibration slot ${calibrationSlot}? This replaces the active in-memory calibration and may also change the device sweep settings.`)) return;
+    setBusy(true);
+    try {
+      const state = await connectionRef.current.recallCalibrationSlot(calibrationSlot);
+      setCalibrationState(state);
+      setMessage(`Device calibration slot ${calibrationSlot} recalled · ${state}. Confirm the recalled frequency range and reference plane before measuring.`);
+    } catch (error) { setMessage(`Calibration recall failed: ${(error as Error).message}`); }
+    finally { setBusy(false); }
   }
 
   function exportCsv() {
@@ -773,6 +907,18 @@ export default function App() {
       setSourceInfo({ sourceName: file.name, sourceKind: 'file', device: 'Imported file', calibration: 'Not provided by source' });
       setMessage(`Loaded ${file.name} · ${data.length} samples.`);
     } catch (error) { setMessage(`File load failed: ${(error as Error).message}`); }
+  }
+
+  function compareCurrentMeasurement() {
+    const id = `current-${Date.now()}`;
+    setComparisonDatasets((current) => [...current, {
+      id,
+      name: sourceInfo.sourceName,
+      color: DEFAULT_MARKER_COLORS[current.length % DEFAULT_MARKER_COLORS.length],
+      visible: true,
+      points: points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })),
+    }]);
+    setComparisonOpen(true);
   }
 
   return (
@@ -805,7 +951,14 @@ export default function App() {
             <div className={`serial-status ${connected ? 'online' : ''}`}>{connected ? `Connected · 115200 baud` : 'No serial port connected'}</div>
             <button className="wide" onClick={toggleConnection} disabled={busy}>{connected ? 'Disconnect' : 'Connect to NanoVNA'}</button>
           </fieldset>
-          <fieldset><legend>Files</legend><div className="file-buttons"><label className="file-picker">Load CSV / Touchstone…<input type="file" accept=".csv,.s1p,.s2p" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadMeasurement(file); event.target.value = ''; }} /></label><button onClick={() => setComparisonOpen(true)}>Compare measurements…</button><button onClick={exportCsv}>Raw S11/S21 CSV…</button><button onClick={exportTouchstone}>S11 Touchstone .s1p…</button></div><small>S21 remains in CSV because the NanoVNA does not measure the S12/S22 values required for a complete .s2p file. Each plot saves directly to PNG.</small></fieldset>
+          <fieldset><legend>Device calibration</legend>
+            <div className="calibration-state"><span>Status</span><b title={calibrationState}>{calibrationState}</b></div>
+            <button className="wide" onClick={() => setCalibrationOpen(true)} disabled={!connected || busy || !capabilities.calibration}>Guided OPEN / SHORT / LOAD / THRU…</button>
+            <div className="calibration-toggle"><button onClick={() => setDeviceCalibrationEnabled(true)} disabled={!connected || busy || !capabilities.calibration}>Correction on</button><button onClick={() => setDeviceCalibrationEnabled(false)} disabled={!connected || busy || !capabilities.calibration}>Correction off</button></div>
+            <div className="calibration-slots"><label>Slot<select value={calibrationSlot} onChange={(event) => setCalibrationSlot(Number(event.target.value))}>{[0, 1, 2, 3, 4].map((slot) => <option key={slot}>{slot}</option>)}</select></label><button onClick={recallCalibrationSlot} disabled={!connected || busy || !capabilities.calibrationSlots}>Recall</button><button onClick={saveCalibrationSlot} disabled={!connected || busy || !capabilities.calibrationSlots}>Save</button></div>
+            <small>{!connected ? 'Connect a device to detect calibration support.' : !capabilities.calibration ? 'This firmware did not advertise the cal command.' : capabilities.calibrationSlots ? 'Slots 0–4 are the common range across supported NanoVNA firmware.' : 'Calibration is available, but save/recall commands were not advertised.'}</small>
+          </fieldset>
+          <fieldset><legend>Files</legend><div className="file-buttons"><label className="file-picker">Load CSV / Touchstone…<input type="file" accept=".csv,.s1p,.s2p" onChange={(event) => { const file = event.target.files?.[0]; if (file) loadMeasurement(file); event.target.value = ''; }} /></label><button onClick={compareCurrentMeasurement}>Compare current measurement…</button><button onClick={() => setComparisonOpen(true)}>Open comparison workspace…</button><button onClick={exportCsv}>Raw S11/S21 CSV…</button><button onClick={exportTouchstone}>S11 Touchstone .s1p…</button></div><small>S21 remains in CSV because the NanoVNA does not measure the S12/S22 values required for a complete .s2p file. Each plot saves directly to PNG.</small></fieldset>
         </aside>
 
         <section className="readouts-column">
@@ -814,9 +967,14 @@ export default function App() {
           <details className="analysis-guide">
             <summary>Suggested views</summary>
             <div className="analysis-guide-content">
+            <label className="suggestion-target">Apply to
+              <select value={suggestedPane} onChange={(event) => setSuggestedPane(Number(event.target.value))}>
+                {views.map((view, index) => <option value={index} key={index}>Pane {index + 1}: {VIEW_LABELS[view]}</option>)}
+              </select>
+            </label>
             {plotSuggestions.map((suggestion) => <article className="plot-suggestion" key={suggestion.mode}>
               <div><b>{suggestion.title}</b><p>{suggestion.reason}</p></div>
-              <button onClick={() => showSuggestedPlot(suggestion.mode)} disabled={views.includes(suggestion.mode)}>{views.includes(suggestion.mode) ? 'Shown' : 'Show'}</button>
+              <button onClick={() => showSuggestedPlot(suggestion.mode, suggestedPane)} disabled={views[suggestedPane] === suggestion.mode}>{views[suggestedPane] === suggestion.mode ? `In pane ${suggestedPane + 1}` : `Set pane ${suggestedPane + 1}`}</button>
             </article>)}
             <small>These are descriptive checks from the loaded samples, not pass/fail judgments.</small>
             </div>
@@ -837,6 +995,24 @@ export default function App() {
             <section><h3>Where to start</h3><p>Use log magnitude to locate matching and transmission features, VSWR for a simple mismatch reading, and the Smith chart or R/X plot to understand what kind of impedance correction may be needed. Confirm a suspected resonance with impedance and phase behavior.</p></section>
             <section><h3>Markers and references</h3><p>Drag markers directly on any plot. Marker frequency snaps to an acquired sample; most readouts are calculated from that sample, while group delay uses neighboring phase samples. A reference sweep helps compare a later measurement against a baseline; it does not calibrate the instrument.</p></section>
             <section><h3>Derived views</h3><p>Impedance, admittance, equivalent component values, and group delay are calculated from S-parameters. They depend on calibration and model assumptions. Group delay uses neighboring phase samples and can become unstable near a deep magnitude null.</p></section>
+            <section><h3>Hardware validation</h3><p>Measure the same DUT with identical settings in NanoVNA Web and NanoVNA Saver. Use “Compare current measurement” and import the Saver Touchstone file. Pointwise validation runs only on identical frequency arrays and reports raw complex deltas without an invented pass/fail threshold.</p></section>
+          </div>
+        </section>
+      </div>}
+      {calibrationOpen && <div className="modal-backdrop" onMouseDown={() => !busy && setCalibrationOpen(false)}>
+        <section className="about-dialog calibration-dialog" role="dialog" aria-modal="true" aria-labelledby="calibration-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="about-titlebar"><h2 id="calibration-title">Device calibration</h2><button onClick={() => setCalibrationOpen(false)} disabled={busy}>Close</button></div>
+          <div className="calibration-content">
+            <p>This runs the calibration implemented by the connected NanoVNA firmware over the current <b>{start}–{stop}</b> span with <b>{pointCount} points</b>. Keep every cable and adapter that defines the reference plane in place.</p>
+            <div className="calibration-reset"><button onClick={beginCalibration} disabled={busy}>{calibrationStarted ? 'Reset and restart calibration' : 'Reset device calibration and begin'}</button><span>{calibrationStarted ? 'Ready to collect standards' : 'No changes are made until this button is pressed'}</span></div>
+            <ol className="calibration-steps">
+              {CALIBRATION_STEPS.map((step) => <li className={calibrationCompleted.includes(step.key) ? 'complete' : ''} key={step.key}>
+                <div><b>{step.title}</b><span>{step.instruction}</span><small>{step.requiredFor === 'one-port' ? 'Required for one-port calibration' : 'Required for two-port calibration'}</small></div>
+                <button onClick={() => measureCalibrationStep(step.key)} disabled={!calibrationStarted || busy}>{calibrationCompleted.includes(step.key) ? 'Measure again' : `Measure ${step.title}`}</button>
+              </li>)}
+            </ol>
+            <div className="calibration-apply"><button onClick={() => finishCalibration(false)} disabled={!calibrationStarted || busy || !['open', 'short', 'load'].every((step) => calibrationCompleted.includes(step as CalibrationStep))}>Apply one-port</button><button onClick={() => finishCalibration(true)} disabled={!calibrationStarted || busy || !['open', 'short', 'load', 'isoln', 'thru'].every((step) => calibrationCompleted.includes(step as CalibrationStep))}>Apply two-port</button></div>
+            <p className="calibration-caution">Applying calibration does not save it to flash. After it is applied, use the calibration-slot controls if you want to retain it on the device. Recalling a slot may also restore its sweep settings; verify the displayed range before measuring.</p>
           </div>
         </section>
       </div>}

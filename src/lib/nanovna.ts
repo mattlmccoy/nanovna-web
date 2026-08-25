@@ -24,6 +24,29 @@ interface SerialNavigator extends Navigator {
   };
 }
 
+export type CalibrationStep = 'load' | 'open' | 'short' | 'thru' | 'isoln';
+
+export interface NanoVNACapabilities {
+  scan: boolean;
+  scanMask: boolean;
+  calibration: boolean;
+  calibrationSlots: boolean;
+  pauseResume: boolean;
+  bandwidth: boolean;
+}
+
+export interface SweepUpdate {
+  points: SweepPoint[];
+  completedSegments: number;
+  totalSegments: number;
+  progress: number;
+}
+
+export interface SweepResult extends SweepUpdate {
+  cancelled: boolean;
+  complete: boolean;
+}
+
 function parseComplex(line: string): Complex | null {
   const values = line.trim().split(/\s+/).map(Number);
   if (values.length < 2 || values.some((value) => !Number.isFinite(value))) return null;
@@ -52,6 +75,16 @@ export function segmentRanges(start: number, stop: number, points: number, segme
   });
 }
 
+export function parseShellCommands(helpLines: string[]): Set<string> {
+  const ignored = new Set(['commands', 'command', 'usage', 'ch']);
+  return new Set(helpLines.join(' ').toLowerCase().split(/[^a-z0-9_]+/).filter((token) => token && !ignored.has(token)));
+}
+
+export function validateCalibrationSlot(slot: number): number {
+  if (!Number.isInteger(slot) || slot < 0 || slot > 4) throw new Error('Calibration slot must be an integer from 0 through 4.');
+  return slot;
+}
+
 export class NanoVNAConnection {
   private port: SerialPortLike | null = null;
   private reader: SerialReader | null = null;
@@ -62,6 +95,8 @@ export class NanoVNAConnection {
   calibration = 'Unknown';
   supportsScan = false;
   supportsScanMask = false;
+  commands = new Set<string>();
+  capabilities: NanoVNACapabilities = { scan: false, scanMask: false, calibration: false, calibrationSlots: false, pauseResume: false, bandwidth: false };
 
   static supported(): boolean {
     return Boolean((navigator as SerialNavigator).serial);
@@ -80,12 +115,18 @@ export class NanoVNAConnection {
       await this.readUntilPrompt(3000);
       const versionLines = await this.command('version');
       this.version = versionLines[0] || 'Unknown firmware';
-      const help = (await this.command('help')).join(' ').toLowerCase();
-      this.supportsScan = help.includes('scan') && atLeastVersion(this.version, [0, 2, 0]);
-      this.supportsScanMask = help.includes('scan') && atLeastVersion(this.version, [0, 7, 1]);
-      if (help.split(/\s+/).some((entry) => entry.replace(/[^a-z]/g, '') === 'cal')) {
-        this.calibration = (await this.command('cal')).join(' ') || 'Unknown';
-      }
+      this.commands = parseShellCommands(await this.command('help'));
+      this.supportsScan = this.commands.has('scan') && atLeastVersion(this.version, [0, 2, 0]);
+      this.supportsScanMask = this.commands.has('scan') && atLeastVersion(this.version, [0, 7, 1]);
+      this.capabilities = {
+        scan: this.supportsScan,
+        scanMask: this.supportsScanMask,
+        calibration: this.commands.has('cal'),
+        calibrationSlots: this.commands.has('cal') && this.commands.has('save') && this.commands.has('recall'),
+        pauseResume: this.commands.has('pause') && this.commands.has('resume'),
+        bandwidth: this.commands.has('bandwidth'),
+      };
+      if (this.capabilities.calibration) await this.refreshCalibration();
       return this.version;
     } catch (error) {
       await this.disconnect();
@@ -103,16 +144,74 @@ export class NanoVNAConnection {
     this.port = null;
   }
 
-  async sweep(start: number, stop: number, points: number, segments = 1, onProgress?: (value: number) => void, isCancelled?: () => boolean): Promise<SweepPoint[]> {
+  async sweep(start: number, stop: number, points: number, segments = 1, onSegment?: (update: SweepUpdate) => void, isCancelled?: () => boolean): Promise<SweepResult> {
     const result: SweepPoint[] = [];
     const ranges = segmentRanges(start, stop, points, segments);
+    let completedSegments = 0;
     for (let segment = 0; segment < ranges.length; segment += 1) {
       if (isCancelled?.()) break;
       const values = await this.readSegment(ranges[segment].start, ranges[segment].stop, points);
       result.push(...values);
-      onProgress?.((segment + 1) / segments);
+      completedSegments = segment + 1;
+      onSegment?.({ points: result.slice(), completedSegments, totalSegments: segments, progress: completedSegments / segments });
     }
-    return result;
+    const cancelled = Boolean(isCancelled?.()) && completedSegments < segments;
+    return { points: result, completedSegments, totalSegments: segments, progress: completedSegments / segments, cancelled, complete: completedSegments === segments };
+  }
+
+  async refreshCalibration(): Promise<string> {
+    this.requireCapability('calibration', 'Device calibration commands');
+    this.calibration = (await this.command('cal')).join(' ').trim() || 'No calibration terms reported';
+    return this.calibration;
+  }
+
+  async collectCalibration(step: CalibrationStep, start: number, stop: number, points: number): Promise<{ points: SweepPoint[]; state: string }> {
+    this.requireCapability('calibration', 'Device calibration commands');
+    const values = await this.readSegment(start, stop, points);
+    this.assertAccepted(`cal ${step}`, await this.command(`cal ${step}`, 15000));
+    return { points: values, state: await this.refreshCalibration() };
+  }
+
+  async resetCalibration(): Promise<string> {
+    this.requireCapability('calibration', 'Device calibration commands');
+    this.assertAccepted('cal reset', await this.command('cal reset'));
+    return this.refreshCalibration();
+  }
+
+  async finishCalibration(): Promise<string> {
+    this.requireCapability('calibration', 'Device calibration commands');
+    this.assertAccepted('cal done', await this.command('cal done', 15000));
+    this.assertAccepted('cal on', await this.command('cal on'));
+    return this.refreshCalibration();
+  }
+
+  async setCalibrationEnabled(enabled: boolean): Promise<string> {
+    this.requireCapability('calibration', 'Device calibration commands');
+    this.assertAccepted(`cal ${enabled ? 'on' : 'off'}`, await this.command(`cal ${enabled ? 'on' : 'off'}`));
+    return this.refreshCalibration();
+  }
+
+  async saveCalibrationSlot(slot: number): Promise<string> {
+    this.requireCapability('calibrationSlots', 'Calibration slot storage');
+    const id = validateCalibrationSlot(slot);
+    this.assertAccepted(`save ${id}`, await this.command(`save ${id}`, 15000));
+    return this.refreshCalibration();
+  }
+
+  async recallCalibrationSlot(slot: number): Promise<string> {
+    this.requireCapability('calibrationSlots', 'Calibration slot storage');
+    const id = validateCalibrationSlot(slot);
+    this.assertAccepted(`recall ${id}`, await this.command(`recall ${id}`, 15000));
+    return this.refreshCalibration();
+  }
+
+  private requireCapability(capability: keyof NanoVNACapabilities, label: string) {
+    if (!this.capabilities[capability]) throw new Error(`${label} are not advertised by this firmware.`);
+  }
+
+  private assertAccepted(command: string, lines: string[]) {
+    const response = lines.join(' ');
+    if (/\b(?:usage|error|err\b|invalid|unknown)\b/i.test(response)) throw new Error(`NanoVNA rejected “${command}”: ${response}`);
   }
 
   private async readSegment(start: number, stop: number, points: number): Promise<SweepPoint[]> {

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type SetStateAction } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type DragEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from 'react';
 import { parseMeasurementFile } from '../lib/files';
-import { analyzeSweep, commonFrequencySpan } from '../lib/comparison';
+import { analyzeSweep, commonFrequencySpan, comparePointwise } from '../lib/comparison';
 import { db, impedance, magnitude, phase, vswr, type SweepPoint } from '../lib/rf';
 
 export interface ComparisonDataset {
@@ -12,6 +12,7 @@ export interface ComparisonDataset {
 }
 
 type ComparisonView = 's11-db' | 's21-db' | 'smith' | 'vswr' | 's11-phase' | 's21-phase' | 'resistance' | 'reactance';
+type ComparisonMarker = { id: number; frequency: number; color: string };
 
 const COLORS = ['#a9008b', '#e2aa00', '#009d9a', '#d7191c', '#20aa35', '#173de3', '#e76f00', '#6b3fa0'];
 const VIEW_LABELS: Record<ComparisonView, string> = {
@@ -39,6 +40,13 @@ function compactFrequency(value: number): string {
   return `${value.toFixed(0)} Hz`;
 }
 
+function parseFrequencyInput(value: string): number {
+  const match = value.trim().toLowerCase().replace(/hz$/, '').match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*([kmg]?)$/);
+  if (!match) throw new Error(`Invalid marker frequency: ${value}`);
+  const multiplier = match[2] === 'g' ? 1e9 : match[2] === 'm' ? 1e6 : match[2] === 'k' ? 1e3 : 1;
+  return Number(match[1]) * multiplier;
+}
+
 function formatNumber(value: number, digits = 2): string {
   return Number.isFinite(value) ? value.toFixed(digits) : '—';
 }
@@ -52,6 +60,22 @@ function valuesForView(view: ComparisonView, points: SweepPoint[]): number[] {
   if (view === 'resistance') return points.map((point) => impedance(point.s11).re);
   if (view === 'reactance') return points.map((point) => impedance(point.s11).im);
   return [];
+}
+
+function nearestPoint(points: SweepPoint[], frequency: number): SweepPoint {
+  return points.reduce((closest, point) => Math.abs(point.frequency - frequency) < Math.abs(closest.frequency - frequency) ? point : closest, points[0]);
+}
+
+function markerValue(view: ComparisonView, point: SweepPoint): string {
+  if (view === 's11-db') return `${formatNumber(db(point.s11))} dB`;
+  if (view === 's21-db') return `${formatNumber(db(point.s21))} dB`;
+  if (view === 'vswr') return Number.isFinite(vswr(point.s11)) ? `${formatNumber(vswr(point.s11))}:1` : '∞:1';
+  if (view === 's11-phase') return `${formatNumber(phase(point.s11), 1)}°`;
+  if (view === 's21-phase') return `${formatNumber(phase(point.s21), 1)}°`;
+  const z = impedance(point.s11);
+  if (view === 'resistance') return `${formatNumber(z.re)} Ω`;
+  if (view === 'reactance') return `${formatNumber(z.im)} Ω`;
+  return `${formatNumber(z.re)} ${z.im < 0 ? '−' : '+'} j${formatNumber(Math.abs(z.im))} Ω`;
 }
 
 function safeFilename(value: string): string {
@@ -96,11 +120,11 @@ function exportSummary(dataset: ComparisonDataset, view: ComparisonView): string
   return `${minimumText} · ${impedanceText}`;
 }
 
-function downloadComparisonReport(canvas: HTMLCanvasElement, datasets: ComparisonDataset[], view: ComparisonView, theme: 'light' | 'dark', commonSpan: { start: number; stop: number } | null) {
+function downloadComparisonReport(canvas: HTMLCanvasElement, datasets: ComparisonDataset[], markers: ComparisonMarker[], view: ComparisonView, theme: 'light' | 'dark', commonSpan: { start: number; stop: number } | null) {
   const ratio = window.devicePixelRatio || 1;
   const reportWidth = Math.max(canvas.width, Math.round(1100 * ratio));
   const plotHeight = Math.round(canvas.height * reportWidth / canvas.width);
-  const footerHeight = Math.round((78 + datasets.length * 22) * ratio);
+  const footerHeight = Math.round((82 + datasets.length * 22 + markers.length * 18) * ratio);
   const report = document.createElement('canvas');
   report.width = reportWidth;
   report.height = plotHeight + footerHeight;
@@ -132,6 +156,17 @@ function downloadComparisonReport(canvas: HTMLCanvasElement, datasets: Compariso
     ctx.fillStyle = dark ? '#f0f0eb' : '#242421';
     drawFittedText(ctx, `${dataset.name} · ${analysis.pointCount} points · ${formatFrequency(analysis.startFrequency)} – ${formatFrequency(analysis.stopFrequency)} · ${analysisText}`, 31, y, width - 45);
   });
+  markers.forEach((marker, markerIndex) => {
+    const y = top + 91 + datasets.length * 22 + markerIndex * 18;
+    const values = datasets.map((dataset) => {
+      const point = nearestPoint(dataset.points, marker.frequency);
+      return `${dataset.name}: ${formatFrequency(point.frequency)}, ${markerValue(view, point)}`;
+    }).join(' · ');
+    ctx.fillStyle = marker.color;
+    ctx.fillRect(14, y - 9, 9, 9);
+    ctx.fillStyle = dark ? '#f0f0eb' : '#242421';
+    drawFittedText(ctx, `M${markerIndex + 1} · ${values}`, 30, y, width - 44);
+  });
   ctx.restore();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   report.toBlob((blob) => {
@@ -145,8 +180,18 @@ function downloadComparisonReport(canvas: HTMLCanvasElement, datasets: Compariso
   }, 'image/png');
 }
 
-function ComparisonChart({ datasets, view, theme }: { datasets: ComparisonDataset[]; view: ComparisonView; theme: 'light' | 'dark' }) {
+function ComparisonChart({ datasets, markers, activeMarker, view, theme, onMarkerChange, onActiveMarkerChange }: {
+  datasets: ComparisonDataset[];
+  markers: ComparisonMarker[];
+  activeMarker: number;
+  view: ComparisonView;
+  theme: 'light' | 'dark';
+  onMarkerChange: (index: number, frequency: number) => void;
+  onActiveMarkerChange: (index: number) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const draggingRef = useRef<number | null>(null);
+  const geometryRef = useRef({ start: 0, stop: 1, area: { x: 0, y: 0, w: 1, h: 1 }, smith: false, cx: 0, cy: 0, radius: 1 });
   const [resizeVersion, setResizeVersion] = useState(0);
 
   useEffect(() => {
@@ -190,6 +235,21 @@ function ComparisonChart({ datasets, view, theme }: { datasets: ComparisonDatase
       ctx.stroke();
     };
 
+    const drawMarker = (x: number, y: number, marker: ComparisonMarker, index: number, datasetColor?: string) => {
+      ctx.fillStyle = marker.color;
+      ctx.strokeStyle = datasetColor ?? (dark ? '#f0f0eb' : '#242421');
+      ctx.lineWidth = index === activeMarker ? 2 : 1;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 6, y - 10);
+      ctx.lineTo(x + 6, y - 10);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = dark ? '#f0f0eb' : '#242421';
+      ctx.fillText(`M${index + 1}`, x + 7, y - 3);
+    };
+
     if (view === 'smith') {
       const radius = Math.min(width, height) * 0.43;
       const cx = width / 2;
@@ -209,6 +269,11 @@ function ComparisonChart({ datasets, view, theme }: { datasets: ComparisonDatase
       });
       ctx.restore();
       datasets.forEach((dataset) => drawLine(dataset.points.map((point) => ({ x: cx + point.s11.re * radius, y: cy - point.s11.im * radius })), dataset.color));
+      geometryRef.current = { start: 0, stop: 1, area: { x: cx - radius, y: cy - radius, w: radius * 2, h: radius * 2 }, smith: true, cx, cy, radius };
+      markers.forEach((marker, markerIndex) => datasets.forEach((dataset) => {
+        const point = nearestPoint(dataset.points, marker.frequency);
+        drawMarker(cx + point.s11.re * radius, cy - point.s11.im * radius, marker, markerIndex, dataset.color);
+      }));
       return;
     }
 
@@ -216,6 +281,7 @@ function ComparisonChart({ datasets, view, theme }: { datasets: ComparisonDatase
     const area = { x: pad.left, y: pad.top, w: width - pad.left - pad.right, h: height - pad.top - pad.bottom };
     const start = Math.min(...datasets.map((dataset) => dataset.points[0].frequency));
     const stop = Math.max(...datasets.map((dataset) => dataset.points.at(-1)!.frequency));
+    geometryRef.current = { start, stop, area, smith: false, cx: 0, cy: 0, radius: 1 };
     const allValues = datasets.flatMap((dataset) => valuesForView(view, dataset.points)).filter(Number.isFinite);
     if (!allValues.length) {
       ctx.fillStyle = text;
@@ -249,9 +315,77 @@ function ComparisonChart({ datasets, view, theme }: { datasets: ComparisonDatase
         breakBefore: (view === 's11-phase' || view === 's21-phase') && index > 0 && Math.abs(value - values[index - 1]) > 180,
       })), dataset.color);
     });
-  }, [datasets, resizeVersion, theme, view]);
+    markers.forEach((marker, markerIndex) => {
+      const x = area.x + area.w * (marker.frequency - start) / Math.max(1, stop - start);
+      ctx.save();
+      ctx.strokeStyle = marker.color;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(x, area.y); ctx.lineTo(x, area.y + area.h); ctx.stroke();
+      ctx.restore();
+      datasets.forEach((dataset) => {
+        const point = nearestPoint(dataset.points, marker.frequency);
+        const value = valuesForView(view, [point])[0];
+        if (!Number.isFinite(value)) return;
+        const sampleX = area.x + area.w * (point.frequency - start) / Math.max(1, stop - start);
+        drawMarker(sampleX, area.y + area.h * (maximum - value) / (maximum - minimum), marker, markerIndex, dataset.color);
+      });
+    });
+  }, [activeMarker, datasets, markers, resizeVersion, theme, view]);
 
-  return <canvas className="comparison-canvas" ref={canvasRef} aria-label={`Comparison ${VIEW_LABELS[view]}`} />;
+  function moveMarker(index: number, clientX: number, clientY: number) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const geometry = geometryRef.current;
+    if (!geometry.smith) {
+      const fraction = Math.max(0, Math.min(1, (x - geometry.area.x) / geometry.area.w));
+      onMarkerChange(index, geometry.start + fraction * (geometry.stop - geometry.start));
+      return;
+    }
+    const candidate = datasets.flatMap((dataset) => dataset.points.map((point) => ({
+      point,
+      distance: Math.hypot(geometry.cx + point.s11.re * geometry.radius - x, geometry.cy - point.s11.im * geometry.radius - y),
+    }))).reduce((closest, item) => item.distance < closest.distance ? item : closest);
+    onMarkerChange(index, candidate.point.frequency);
+  }
+
+  function markerDistance(marker: ComparisonMarker, x: number, y: number): number {
+    const geometry = geometryRef.current;
+    if (!geometry.smith) {
+      const markerX = geometry.area.x + geometry.area.w * (marker.frequency - geometry.start) / Math.max(1, geometry.stop - geometry.start);
+      return Math.abs(markerX - x);
+    }
+    return datasets.reduce((closest, dataset) => {
+      const point = nearestPoint(dataset.points, marker.frequency);
+      return Math.min(closest, Math.hypot(geometry.cx + point.s11.re * geometry.radius - x, geometry.cy - point.s11.im * geometry.radius - y));
+    }, Number.POSITIVE_INFINITY);
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const closest = markers.map((marker, index) => ({ index, distance: markerDistance(marker, x, y) }))
+      .reduce((best, item) => item.distance < best.distance ? item : best, { index: activeMarker, distance: Number.POSITIVE_INFINITY });
+    const index = closest.distance <= 20 ? closest.index : activeMarker;
+    draggingRef.current = index;
+    onActiveMarkerChange(index);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    moveMarker(index, event.clientX, event.clientY);
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (draggingRef.current !== null) moveMarker(draggingRef.current, event.clientX, event.clientY);
+  }
+
+  function handlePointerEnd(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    draggingRef.current = null;
+  }
+
+  return <canvas className="comparison-canvas" ref={canvasRef} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerEnd} onPointerCancel={handlePointerEnd} aria-label={`Comparison ${VIEW_LABELS[view]} with draggable markers`} />;
 }
 
 export function ComparisonMode({ open, onClose, datasets, setDatasets, theme }: {
@@ -263,9 +397,31 @@ export function ComparisonMode({ open, onClose, datasets, setDatasets, theme }: 
 }) {
   const [view, setView] = useState<ComparisonView>('s11-db');
   const [error, setError] = useState('');
+  const markerIdRef = useRef(4);
+  const [markers, setMarkers] = useState<ComparisonMarker[]>([]);
+  const [activeMarker, setActiveMarker] = useState(0);
   const visible = datasets.filter((dataset) => dataset.visible);
   const analyses = useMemo(() => datasets.map((dataset) => ({ dataset, analysis: analyzeSweep(dataset.points) })), [datasets]);
+  const pointwise = useMemo(() => datasets.length > 1 ? datasets.slice(1).map((dataset) => ({
+    dataset,
+    reference: datasets[0],
+    result: comparePointwise(datasets[0].points, dataset.points),
+  })) : [], [datasets]);
   const commonSpan = useMemo(() => commonFrequencySpan(visible.map((dataset) => dataset.points)), [visible]);
+  const overallSpan = useMemo(() => visible.length ? {
+    start: Math.min(...visible.map((dataset) => dataset.points[0].frequency)),
+    stop: Math.max(...visible.map((dataset) => dataset.points.at(-1)!.frequency)),
+  } : null, [visible]);
+
+  useEffect(() => {
+    if (!overallSpan || markers.length) return;
+    const width = overallSpan.stop - overallSpan.start;
+    setMarkers([
+      { id: 1, frequency: overallSpan.start + width * 0.25, color: '#173de3' },
+      { id: 2, frequency: overallSpan.start + width * 0.5, color: '#d7191c' },
+      { id: 3, frequency: overallSpan.start + width * 0.75, color: '#20aa35' },
+    ]);
+  }, [markers.length, overallSpan]);
 
   useEffect(() => {
     if (!open) return;
@@ -297,6 +453,26 @@ export function ComparisonMode({ open, onClose, datasets, setDatasets, theme }: 
     void addFiles(Array.from(event.dataTransfer.files).filter((file) => /\.(s1p|s2p|csv)$/i.test(file.name)));
   }
 
+  function updateMarker(index: number, frequency: number) {
+    if (!overallSpan || !Number.isFinite(frequency)) return;
+    const clamped = Math.max(overallSpan.start, Math.min(overallSpan.stop, frequency));
+    setMarkers((current) => current.map((marker, candidate) => candidate === index ? { ...marker, frequency: clamped } : marker));
+  }
+
+  function addMarker() {
+    if (!overallSpan) return;
+    const id = markerIdRef.current++;
+    const frequency = markers[activeMarker]?.frequency ?? (overallSpan.start + overallSpan.stop) / 2;
+    setMarkers((current) => [...current, { id, frequency, color: COLORS[current.length % COLORS.length] }]);
+    setActiveMarker(markers.length);
+  }
+
+  function removeMarker(index: number) {
+    if (markers.length <= 1) return;
+    setMarkers((current) => current.filter((_, candidate) => candidate !== index));
+    setActiveMarker((current) => Math.max(0, Math.min(current > index ? current - 1 : current, markers.length - 2)));
+  }
+
   if (!open) return null;
   return <div className="comparison-backdrop" role="dialog" aria-modal="true" aria-labelledby="comparison-title">
     <section className="comparison-workspace">
@@ -319,16 +495,31 @@ export function ComparisonMode({ open, onClose, datasets, setDatasets, theme }: 
           <div className="comparison-dropzone" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>Drop S1P, S2P, or raw CSV files here</div>
           {error && <p className="comparison-error">{error}</p>}
           {visible.length > 1 && <div className="comparison-span"><b>Common frequency span</b><span>{commonSpan ? `${formatFrequency(commonSpan.start)} – ${formatFrequency(commonSpan.stop)}` : 'No overlap'}</span></div>}
+          {markers.length > 0 && <div className="comparison-markers"><div className="comparison-sidebar-title">Markers</div>
+            {markers.map((marker, index) => <div className={`comparison-marker-control ${activeMarker === index ? 'active' : ''}`} key={marker.id}>
+              <input type="radio" name="comparison-marker" checked={activeMarker === index} onChange={() => setActiveMarker(index)} aria-label={`Select comparison marker ${index + 1}`} />
+              <input type="color" value={marker.color} onChange={(event) => setMarkers((current) => current.map((item, candidate) => candidate === index ? { ...item, color: event.target.value } : item))} aria-label={`Comparison marker ${index + 1} color`} />
+              <input defaultValue={formatFrequency(marker.frequency).replace(' ', '')} key={`${marker.id}-${Math.round(marker.frequency)}`} onBlur={(event) => { try { updateMarker(index, parseFrequencyInput(event.target.value)); } catch (markerError) { setError((markerError as Error).message); } }} aria-label={`Comparison marker ${index + 1} frequency`} />
+              <button onClick={() => removeMarker(index)} disabled={markers.length <= 1} aria-label={`Remove comparison marker ${index + 1}`}>−</button>
+            </div>)}
+            <button className="wide" onClick={addMarker}>Add marker</button>
+            <small>Drag the selected marker on the plot. Every file snaps to its nearest acquired frequency.</small>
+          </div>}
         </aside>
         <main className="comparison-main">
           <div className="comparison-toolbar">
             <select value={view} onChange={(event) => setView(event.target.value as ComparisonView)} aria-label="Comparison diagnostic">
               {Object.entries(VIEW_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
-            <button onClick={() => { const canvas = document.querySelector<HTMLCanvasElement>('.comparison-canvas'); if (canvas) downloadComparisonReport(canvas, visible, view, theme, commonSpan); }} disabled={!visible.length}>Save PNG</button>
+            <button onClick={() => { const canvas = document.querySelector<HTMLCanvasElement>('.comparison-canvas'); if (canvas) downloadComparisonReport(canvas, visible, markers, view, theme, commonSpan); }} disabled={!visible.length}>Save PNG</button>
           </div>
           <div className="comparison-chart-wrap">
-            {visible.length ? <ComparisonChart datasets={visible} view={view} theme={theme} /> : <div className="comparison-empty">Add files and enable at least one trace.</div>}
+            {visible.length ? <><ComparisonChart datasets={visible} markers={markers} activeMarker={activeMarker} view={view} theme={theme} onMarkerChange={updateMarker} onActiveMarkerChange={setActiveMarker} />
+              <div className="comparison-marker-readouts">{markers.map((marker, markerIndex) => <button className={activeMarker === markerIndex ? 'active' : ''} style={{ borderLeftColor: marker.color }} onClick={() => setActiveMarker(markerIndex)} key={marker.id}>
+                <b style={{ color: marker.color }}>M{markerIndex + 1}</b>
+                {visible.map((dataset) => { const point = nearestPoint(dataset.points, marker.frequency); return <span key={dataset.id}><i style={{ background: dataset.color }} />{dataset.name}: {compactFrequency(point.frequency)} · {markerValue(view, point)}</span>; })}
+              </button>)}</div>
+            </> : <div className="comparison-empty">Add files and enable at least one trace.</div>}
           </div>
           {analyses.length > 0 && <div className="comparison-analysis">
             <h3>Measured summary</h3>
@@ -346,6 +537,12 @@ export function ComparisonMode({ open, onClose, datasets, setDatasets, theme }: 
               </tr>)}</tbody>
             </table></div>
             <p>Each trace uses its original frequency samples. Lines connect adjacent samples; files are not interpolated onto a shared grid. Summary values cover each file’s full listed span, which may differ between files. The −10 dB result is the contiguous below-threshold region around that file’s lowest S11 sample, not a universal acceptance criterion.</p>
+            {pointwise.length > 0 && <div className="pointwise-validation"><h3>Pointwise validation</h3><p>The first loaded file is the reference. Deltas are calculated only when frequency arrays match exactly; no resampling or pass/fail threshold is applied.</p>
+              {pointwise.map(({ dataset, reference, result }) => <div className={result.aligned ? 'aligned' : 'unaligned'} key={dataset.id}>
+                <b>{dataset.name} versus {reference.name}</b>
+                {result.aligned ? <span>{result.pointCount} aligned points · max Δf {formatNumber(result.maximumFrequencyDeltaHz!, 0)} Hz · S11 complex Δ RMS {formatNumber(result.rmsS11ComplexDelta!, 6)}, max {formatNumber(result.maximumS11ComplexDelta!, 6)} · {result.rmsS21ComplexDelta === null ? 'S21 unavailable' : `S21 complex Δ over ${result.s21PointCount} points: RMS ${formatNumber(result.rmsS21ComplexDelta, 6)}, max ${formatNumber(result.maximumS21ComplexDelta!, 6)}`}</span> : <span>Not pointwise-comparable · {result.reason}{result.maximumFrequencyDeltaHz === null ? '' : ` Maximum Δf ${formatNumber(result.maximumFrequencyDeltaHz, 0)} Hz.`}</span>}
+              </div>)}
+            </div>}
           </div>}
         </main>
       </div>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { analyzeSweep, commonFrequencySpan } from './comparison.ts';
+import { analyzeSweep, commonFrequencySpan, comparePointwise } from './comparison.ts';
 import type { SweepPoint } from './rf.ts';
 
 function sweep(start: number, values: number[]): SweepPoint[] {
@@ -25,4 +25,16 @@ test('comparison analysis reports measured extrema without resampling', () => {
 test('common span is the intersection and rejects disjoint files', () => {
   assert.deepEqual(commonFrequencySpan([sweep(1e6, [0.5, 0.4, 0.3]), sweep(2e6, [0.5, 0.4, 0.3])]), { start: 2e6, stop: 3e6 });
   assert.equal(commonFrequencySpan([sweep(1e6, [0.5]), sweep(2e6, [0.5])]), null);
+});
+
+test('pointwise comparison requires identical grids and reports raw complex deltas', () => {
+  const reference = sweep(1e6, [0.5, 0.4]);
+  const candidate = reference.map((point) => ({ ...point, s11: { re: point.s11.re + 0.1, im: point.s11.im }, s21: { ...point.s21 } }));
+  const result = comparePointwise(reference, candidate);
+  assert.equal(result.aligned, true);
+  assert.ok(Math.abs(result.maximumS11ComplexDelta! - 0.1) < 1e-12);
+  assert.ok(Math.abs(result.rmsS11ComplexDelta! - 0.1) < 1e-12);
+  const shifted = candidate.map((point) => ({ ...point, frequency: point.frequency + 1 }));
+  assert.equal(comparePointwise(reference, shifted).aligned, false);
+  assert.match(comparePointwise(reference, shifted).reason!, /not identical/);
 });
