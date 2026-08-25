@@ -51,18 +51,20 @@ export function InstrumentPanel({ points, markerIndex, reference, currentContext
   const [audioError, setAudioError] = useState('');
   const [baseFrequency, setBaseFrequency] = useState(220);
   const [reactancePerOctave, setReactancePerOctave] = useState(75);
-  const [fullVolumeChange, setFullVolumeChange] = useState(40);
-  const [deadband, setDeadband] = useState(1);
+  const [pitchDirection, setPitchDirection] = useState<1 | -1>(-1);
+  const [fullVolumeChange, setFullVolumeChange] = useState(100);
+  const [deadband, setDeadband] = useState(.25);
   const [volume, setVolume] = useState(.03);
+  const [smoothingMs, setSmoothingMs] = useState(80);
   const [shape, setShape] = useState<OscillatorShape>('sine');
-  const smoothingSeconds = .035;
+  const smoothingSeconds = smoothingMs / 1000;
   const safeIndex = Math.min(markerIndex, Math.max(0, points.length - 1));
   const point = points[safeIndex];
   const metadataCompatible = Boolean(reference && reference.device === currentContext.device && reference.session === currentContext.session && reference.calibration === currentContext.calibration && reference.processing === currentContext.processing);
   const gridCompatible = Boolean(reference && gridsMatch(points, reference.points));
   const compatible = metadataCompatible && gridCompatible;
   const referencePoint = compatible && reference ? reference.points[safeIndex] : null;
-  const response = useMemo(() => point && referencePoint ? computeSonificationTarget(point, referencePoint, { baseFrequency, reactancePerOctave, fullVolumeChange, deadband, maxGain: volume }) : null, [baseFrequency, deadband, fullVolumeChange, point, reactancePerOctave, referencePoint, volume]);
+  const response = useMemo(() => point && referencePoint ? computeSonificationTarget(point, referencePoint, { baseFrequency, reactancePerOctave, pitchDirection, fullVolumeChange, deadband, maxGain: volume }) : null, [baseFrequency, deadband, fullVolumeChange, pitchDirection, point, reactancePerOctave, referencePoint, volume]);
   const ready = Boolean(response?.valid && dataFresh && watchdogFresh && visible && compatible);
   readyRef.current = ready;
 
@@ -94,7 +96,7 @@ export function InstrumentPanel({ points, markerIndex, reference, currentContext
     nodes.oscillator.type = shape;
     nodes.oscillator.frequency.cancelScheduledValues(now);
     nodes.gain.gain.cancelScheduledValues(now);
-    nodes.oscillator.frequency.setTargetAtTime(response?.frequency ?? baseFrequency, now, .025);
+    nodes.oscillator.frequency.setTargetAtTime(response?.frequency ?? baseFrequency, now, smoothingSeconds);
     nodes.gain.gain.setTargetAtTime(ready && response ? response.gain : 0, now, smoothingSeconds);
   }, [baseFrequency, playing, ready, response, shape]);
 
@@ -196,6 +198,7 @@ export function InstrumentPanel({ points, markerIndex, reference, currentContext
         `# Waveform: ${shape}`,
         `# Base pitch Hz: ${baseFrequency}`,
         `# Reactance ohms per octave: ${reactancePerOctave}`,
+        `# Pitch direction: ${pitchDirection === -1 ? 'negative delta X raises pitch' : 'positive delta X raises pitch'}`,
         `# Full-volume delta Z ohms: ${fullVolumeChange}`,
         `# Silent deadband ohms: ${deadband}`,
         `# Maximum gain: ${volume}`,
@@ -276,14 +279,16 @@ export function InstrumentPanel({ points, markerIndex, reference, currentContext
       <label>Waveform</label><select value={shape} onChange={(event) => setShape(event.target.value as OscillatorShape)}><option value="sine">Sine</option><option value="triangle">Triangle</option><option value="sawtooth">Sawtooth</option><option value="square">Square</option></select>
       <label>Base pitch (Hz)</label><input type="number" min="80" max="2000" value={baseFrequency} onChange={(event) => setBaseFrequency(clamp(Number(event.target.value) || 220, 80, 2000))} />
       <label>Reactance Ω/octave</label><input type="number" min="1" max="1000" value={reactancePerOctave} onChange={(event) => setReactancePerOctave(clamp(Number(event.target.value) || 75, 1, 1000))} />
-      <label>Full volume |ΔZ| (Ω)</label><input type="number" min="1" max="1000" value={fullVolumeChange} onChange={(event) => setFullVolumeChange(clamp(Number(event.target.value) || 40, 1, 1000))} />
-      <label>Silent deadband (Ω)</label><input type="number" min="0" max="100" step="0.1" value={deadband} onChange={(event) => setDeadband(clamp(Number(event.target.value) || 0, 0, 100))} />
+      <label>Pitch direction</label><select value={pitchDirection} onChange={(event) => setPitchDirection(Number(event.target.value) as 1 | -1)}><option value={-1}>Negative ΔX raises pitch</option><option value={1}>Positive ΔX raises pitch</option></select>
+      <label>Full volume |ΔZ| (Ω)</label><input type="number" min="1" max="1000" value={fullVolumeChange} onChange={(event) => setFullVolumeChange(clamp(Number(event.target.value) || 100, 1, 1000))} />
+      <label>Silent deadband (Ω)</label><input type="number" min="0" max="100" step="0.05" value={deadband} onChange={(event) => setDeadband(clamp(Number(event.target.value) || 0, 0, 100))} />
+      <label>Glide (ms)</label><input type="number" min="10" max="500" step="5" value={smoothingMs} onChange={(event) => setSmoothingMs(clamp(Number(event.target.value) || 80, 10, 500))} />
       <label>Maximum gain</label><input type="range" min="0.005" max="0.05" step="0.005" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
     </div>
     {response && <div className="instrument-status"><span>Reference frequency</span><b>{formatFrequency(referencePoint!.frequency)}</b><span>Resistance Δ</span><b>{formatNumber(response.resistanceDelta)} Ω</b><span>Reactance Δ</span><b>{formatNumber(response.reactanceDelta)} Ω</b><span>|ΔZ|</span><b>{formatNumber(response.totalChange)} Ω</b><span>Tone target</span><b>{formatNumber(response.frequency, 1)} Hz</b><span>Gain target</span><b>{formatNumber(response.gain, 3)}</b></div>}
     <div className="instrument-transport"><button onClick={() => void startAudio()} disabled={playing || starting || !ready}>{starting ? 'Starting…' : 'Start audio'}</button><button onClick={stopAudio} disabled={!playing && !starting}>Stop audio</button></div>
     <details className="theremin-test"><summary>Guided tuning test</summary><ol><li>Select <b>Baseline</b> and remain still for 5 seconds.</li><li>Select <b>Approach / recede</b>, approach the sensing plate slowly, pause, then recede.</li><li>Select <b>Touch / release</b> and touch and release the plate five times.</li><li>Select <b>Lateral / distance</b> and move your hand laterally and at several distances for 10 seconds.</li><li>Stop the recording and download both files.</li></ol><label className="test-step">Action tag<select value={testStep} onChange={(event) => setTestStep(event.target.value)}><option value="baseline">Baseline</option><option value="approach-recede">Approach / recede</option><option value="touch-release">Touch / release</option><option value="lateral-distance">Lateral / distance</option><option value="free-play">Free play</option></select></label><div className="instrument-transport"><button onClick={startRecording} disabled={!playing || recording || !ready}>Record test</button><button onClick={stopRecording} disabled={!recording}>Stop</button><button onClick={cancelRecording} disabled={!recording}>Cancel</button></div>{recording && <b className="recording-status">Recording {recordingElapsed.toFixed(1)} s · {testStep}</b>}{recordingNote && <small className="stale-status">{recordingNote}</small>}{completedRecording && <div className="recording-downloads"><a href={completedRecording.audioUrl} download={completedRecording.audioName}>Download audio</a><a href={completedRecording.csvUrl} download={completedRecording.csvName}>Download telemetry CSV</a></div>}<small>The two-minute recorder captures only generated post-limiter Theremin audio and control telemetry. It never uses the microphone or uploads anything. It finalizes automatically if measurement compatibility or freshness is lost. Audio/CSV timing is approximate, and action tags are labels you choose—not detected motion or distance.</small></details>
     {audioError && <small className="stale-status">Audio error: {audioError}</small>}
-    <small>Signed reactance change controls pitch. Total impedance change outside the selected deadband controls loudness. Targets are limited to 80–2000 Hz and 0.05 gain with 35 ms audio smoothing. This is a sonification mapping, not an acoustic property of the DUT. Start with speaker volume low.</small>
+    <small>Signed reactance change controls pitch in the selected direction. Total impedance change outside the selected deadband controls loudness. Targets are limited to 80–2000 Hz and 0.05 gain. The glide setting smooths changes between VNA updates. This is a sonification mapping, not an acoustic property of the DUT. Start with speaker volume low.</small>
   </fieldset>;
 }

@@ -3,6 +3,7 @@ import { impedance, type SweepPoint } from './rf.ts';
 export interface SonificationOptions {
   baseFrequency: number;
   reactancePerOctave: number;
+  pitchDirection: 1 | -1;
   fullVolumeChange: number;
   deadband: number;
   maxGain: number;
@@ -35,6 +36,6 @@ export function computeSonificationTarget(current: SweepPoint, reference: SweepP
   const reactanceDelta = currentZ.im - referenceZ.im;
   const totalChange = Math.hypot(resistanceDelta, reactanceDelta);
   const level = clamp((totalChange - Math.max(0, options.deadband)) / Math.max(1e-6, options.fullVolumeChange), 0, 1);
-  const frequency = clamp(options.baseFrequency * 2 ** clamp(reactanceDelta / Math.max(1e-6, options.reactancePerOctave), -3, 3), 80, 2000);
+  const frequency = clamp(options.baseFrequency * 2 ** clamp((reactanceDelta * options.pitchDirection) / Math.max(1e-6, options.reactancePerOctave), -3, 3), 80, 2000);
   return { valid: true, reason: level === 0 ? 'Inside the selected silent deadband.' : 'Ready', resistanceDelta, reactanceDelta, totalChange, frequency, gain: level * clamp(options.maxGain, 0, .05) };
 }
