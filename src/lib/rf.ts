@@ -17,6 +17,10 @@ export function db(value: Complex): number {
   return 20 * Math.log10(Math.max(magnitude(value), 1e-12));
 }
 
+export function reflectedPowerPercent(value: Complex): number {
+  return magnitude(value) ** 2 * 100;
+}
+
 export function phase(value: Complex): number {
   return Math.atan2(value.im, value.re) * 180 / Math.PI;
 }

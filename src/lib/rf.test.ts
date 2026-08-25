@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bandwidth, db, demoSweep, impedance, magnitude, phase, vswr, type SweepPoint } from './rf.ts';
+import { bandwidth, db, demoSweep, impedance, magnitude, phase, reflectedPowerPercent, vswr, type SweepPoint } from './rf.ts';
 
 test('matched load produces 50 ohms and VSWR 1:1', () => {
   const reflection = { re: 0, im: 0 };
@@ -20,6 +20,12 @@ test('complex display quantities retain sign and units-ready values', () => {
   assert.ok(Math.abs(db(reflection) + 6.020599913) < 1e-6);
   assert.equal(phase(reflection), 90);
   assert.equal(vswr(reflection), 3);
+});
+
+test('reflected power is the squared S11 magnitude as a percentage', () => {
+  assert.equal(reflectedPowerPercent({ re: 0, im: 0 }), 0);
+  assert.equal(reflectedPowerPercent({ re: 0.5, im: 0 }), 25);
+  assert.ok(Math.abs(reflectedPowerPercent({ re: Math.sqrt(0.1), im: 0 }) - 10) < 1e-12);
 });
 
 test('VSWR does not hide invalid reflection magnitudes behind a finite clamp', () => {

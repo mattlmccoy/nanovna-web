@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { NanoVNAConnection } from './lib/nanovna';
 import { parseMeasurementFile } from './lib/files';
-import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, phase, type Complex, type SweepPoint, vswr } from './lib/rf';
+import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, phase, reflectedPowerPercent, type Complex, type SweepPoint, vswr } from './lib/rf';
 
 type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
-type Marker = { index: number; color: string };
+type Marker = { id: number; index: number; color: string };
 
 const VIEW_LABELS: Record<ViewMode, string> = {
   smith: 'S11 Smith Chart',
@@ -29,6 +29,7 @@ const VIEW_LABELS: Record<ViewMode, string> = {
 };
 
 const TRACE = { magenta: '#a9008b', yellow: '#e2aa00', cyan: '#009d9a', red: '#d7191c', green: '#20aa35', blue: '#173de3' };
+const DEFAULT_MARKER_COLORS = [TRACE.blue, TRACE.red, TRACE.green, TRACE.magenta, TRACE.yellow, TRACE.cyan];
 
 function parseFrequency(value: string): number {
   const match = value.trim().match(/^([0-9]*\.?[0-9]+)\s*([kKmMgG]?)\s*(?:[hH][zZ])?$/);
@@ -116,7 +117,7 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function Chart({ mode, points, reference, markers, activeMarker, theme, onMarkerChange, onModeChange }: {
+function Chart({ mode, points, reference, markers, activeMarker, theme, onMarkerChange, onActiveMarkerChange, onModeChange }: {
   mode: ViewMode;
   points: SweepPoint[];
   reference: SweepPoint[] | null;
@@ -124,10 +125,22 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
   activeMarker: number;
   theme: 'light' | 'dark';
   onMarkerChange: (marker: number, index: number) => void;
+  onActiveMarkerChange: (marker: number) => void;
   onModeChange: (mode: ViewMode) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const geometryRef = useRef<{ x: number; y: number; w: number; h: number; smith: boolean }>({ x: 0, y: 0, w: 0, h: 0, smith: false });
+  const markerPositionsRef = useRef<Array<{ x: number; y: number } | undefined>>([]);
+  const draggingMarkerRef = useRef<number | null>(null);
+  const [resizeVersion, setResizeVersion] = useState(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const observer = new ResizeObserver(() => setResizeVersion((version) => version + 1));
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -209,6 +222,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
         ctx.setLineDash([4, 3]); line(referencePositions, dark ? '#b0b0aa' : '#777777'); ctx.setLineDash([]);
       }
       line(positions, mode === 'smith' ? TRACE.magenta : TRACE.yellow);
+      markerPositionsRef.current = markers.map((marker) => positions[marker.index]);
       markers.forEach((marker, index) => drawMarker(marker.index, marker.color, positions[marker.index], index));
       return;
     }
@@ -282,25 +296,26 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
       const position = positionsBySeries[0][marker.index];
       if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) drawMarker(marker.index, marker.color, position, index);
     });
+    markerPositionsRef.current = markers.map((marker) => positionsBySeries[0]?.[marker.index]);
     series.forEach((item, index) => {
       ctx.fillStyle = item.color;
       ctx.fillRect(area.x + index * 86, 2, 12, 2);
       ctx.fillStyle = dark ? '#deded9' : '#222';
       ctx.fillText(`${item.label} (${item.unit})`, area.x + 16 + index * 86, 6);
     });
-  }, [activeMarker, markers, mode, points, reference, theme]);
+  }, [activeMarker, markers, mode, points, reference, resizeVersion, theme]);
 
-  function selectNearest(event: React.MouseEvent<HTMLCanvasElement>) {
+  function moveMarkerToPointer(marker: number, clientX: number, clientY: number) {
     const canvas = canvasRef.current;
     if (!canvas || !points.length) return;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
     const area = geometryRef.current;
     if (!area.smith) {
       const frequency = points[0].frequency + (x - area.x) / area.w * (points.at(-1)!.frequency - points[0].frequency);
       const index = points.reduce((best, point, candidate) => Math.abs(point.frequency - frequency) < Math.abs(points[best].frequency - frequency) ? candidate : best, 0);
-      onMarkerChange(activeMarker, index);
+      onMarkerChange(marker, index);
       return;
     }
     const radius = Math.min(area.w, area.h) * 0.46;
@@ -316,7 +331,33 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
       const by = cy - current.im * radius;
       return distance < (bx - x) ** 2 + (by - y) ** 2 ? candidate : best;
     }, 0);
-    onMarkerChange(activeMarker, index);
+    onMarkerChange(marker, index);
+  }
+
+  function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const closest = markerPositionsRef.current.reduce((best, position, index) => {
+      if (!position) return best;
+      const distance = Math.hypot(position.x - x, position.y - y);
+      return distance < best.distance ? { index, distance } : best;
+    }, { index: activeMarker, distance: Number.POSITIVE_INFINITY });
+    const marker = closest.distance <= 20 ? closest.index : activeMarker;
+    draggingMarkerRef.current = marker;
+    onActiveMarkerChange(marker);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    moveMarkerToPointer(marker, event.clientX, event.clientY);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (draggingMarkerRef.current === null) return;
+    moveMarkerToPointer(draggingMarkerRef.current, event.clientX, event.clientY);
+  }
+
+  function handlePointerEnd(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    draggingMarkerRef.current = null;
   }
 
   function savePng() {
@@ -331,7 +372,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, onMarker
         </select>
         <button onClick={savePng}>Save PNG</button>
       </div>
-      <canvas ref={canvasRef} onClick={selectNearest} aria-label={VIEW_LABELS[mode]} />
+      <canvas ref={canvasRef} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerEnd} onPointerCancel={handlePointerEnd} aria-label={VIEW_LABELS[mode]} />
     </section>
   );
 }
@@ -344,6 +385,7 @@ function MarkerReadout({ point, number }: { point: SweepPoint; number: number })
       <legend>Marker {number}</legend>
       <div><span>Frequency:</span><b>{formatFrequency(point.frequency)}</b></div>
       <div><span>S11 log mag:</span><b>{formatNumber(db(point.s11))} dB</b></div>
+      <div><span>Est. reflected power:</span><b>{formatNumber(reflectedPowerPercent(point.s11), reflectedPowerPercent(point.s11) < 0.1 ? 4 : 2)} % incident</b></div>
       <div><span>S11 phase:</span><b>{formatNumber(phase(point.s11), 1)}°</b></div>
       <div><span>VSWR:</span><b>{Number.isFinite(vswr(point.s11)) ? `${formatNumber(vswr(point.s11))}:1` : '∞:1'}</b></div>
       <div><span>Impedance:</span><b>{formatNumber(z.re)} {z.im < 0 ? '−' : '+'} j{formatNumber(Math.abs(z.im))} Ω</b></div>
@@ -357,6 +399,7 @@ function MarkerReadout({ point, number }: { point: SweepPoint; number: number })
 export default function App() {
   const connectionRef = useRef<NanoVNAConnection | null>(null);
   const stopRequestedRef = useRef(false);
+  const markerIdRef = useRef(4);
   const [points, setPoints] = useState(() => demoSweep(1e6, 51e6, 1001));
   const [reference, setReference] = useState<SweepPoint[] | null>(null);
   const [start, setStart] = useState('1M');
@@ -372,11 +415,12 @@ export default function App() {
   const [message, setMessage] = useState('Demo data shown. Browser smoothing OFF. Device calibration state unknown.');
   const initial = markerIndex(points);
   const [markers, setMarkers] = useState<Marker[]>([
-    { index: initial, color: TRACE.blue },
-    { index: Math.round(points.length * 0.28), color: TRACE.red },
-    { index: Math.round(points.length * 0.84), color: TRACE.green },
+    { id: 1, index: initial, color: TRACE.blue },
+    { id: 2, index: Math.round(points.length * 0.28), color: TRACE.red },
+    { id: 3, index: Math.round(points.length * 0.84), color: TRACE.green },
   ]);
   const [activeMarker, setActiveMarker] = useState(0);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [views, setViews] = useState<ViewMode[]>(['smith', 'return-loss', 's21-polar', 'resistance-reactance']);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
   const bw = useMemo(() => bandwidth(points), [points]);
@@ -386,6 +430,13 @@ export default function App() {
     localStorage.setItem('nanovna-theme', theme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#1d1e20' : '#cfcfcd');
   }, [theme]);
+
+  useEffect(() => {
+    if (!aboutOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setAboutOpen(false); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [aboutOpen]);
 
   function updateMarker(marker: number, index: number) {
     setMarkers((current) => current.map((item, candidate) => candidate === marker ? { ...item, index } : item));
@@ -397,6 +448,31 @@ export default function App() {
       const index = points.reduce((best, point, candidate) => Math.abs(point.frequency - frequency) < Math.abs(points[best].frequency - frequency) ? candidate : best, 0);
       updateMarker(marker, index);
     } catch (error) { setMessage((error as Error).message); }
+  }
+
+  function addMarker() {
+    const id = markerIdRef.current++;
+    const index = markers[activeMarker]?.index ?? markerIndex(points);
+    setMarkers((current) => [...current, { id, index, color: DEFAULT_MARKER_COLORS[current.length % DEFAULT_MARKER_COLORS.length] }]);
+    setActiveMarker(markers.length);
+  }
+
+  function removeMarker(marker: number) {
+    if (markers.length <= 1) return;
+    setMarkers((current) => current.filter((_, index) => index !== marker));
+    setActiveMarker((current) => Math.max(0, Math.min(current > marker ? current - 1 : current, markers.length - 2)));
+  }
+
+  function setMarkerColor(marker: number, color: string) {
+    setMarkers((current) => current.map((item, index) => index === marker ? { ...item, color } : item));
+  }
+
+  function remapMarkersToFrequencies(data: SweepPoint[]) {
+    setMarkers((current) => current.map((marker) => {
+      const frequency = points[Math.min(marker.index, points.length - 1)].frequency;
+      const index = data.reduce((best, point, candidate) => Math.abs(point.frequency - frequency) < Math.abs(data[best].frequency - frequency) ? candidate : best, 0);
+      return { ...marker, index };
+    }));
   }
 
   async function toggleConnection() {
@@ -436,8 +512,7 @@ export default function App() {
         const data = await connectionRef.current.sweep(parseFrequency(start), parseFrequency(stop), pointCount, segments, setProgress, () => stopRequestedRef.current);
         if (data.length) {
           setPoints(data);
-          const minimum = markerIndex(data);
-          setMarkers((current) => current.map((marker, index) => ({ ...marker, index: index === 0 ? minimum : Math.min(marker.index, data.length - 1) })));
+          remapMarkersToFrequencies(data);
           setMessage(`Sweep complete · ${data.length} samples · browser smoothing OFF · device calibration: ${calibrationState}.`);
         }
       } while (continuous && !stopRequestedRef.current);
@@ -472,8 +547,7 @@ export default function App() {
     try {
       const data = parseMeasurementFile(await file.text(), file.name);
       setPoints(data);
-      const minimum = markerIndex(data);
-      setMarkers((current) => current.map((marker, index) => ({ ...marker, index: index === 0 ? minimum : Math.min(marker.index, data.length - 1) })));
+      remapMarkersToFrequencies(data);
       setMessage(`Loaded ${file.name} · ${data.length} samples.`);
     } catch (error) { setMessage(`File load failed: ${(error as Error).message}`); }
   }
@@ -490,8 +564,15 @@ export default function App() {
             <div className="sweep-buttons"><button onClick={runSweep} disabled={busy || !connected}>Sweep</button><button onClick={stopSweep} disabled={!busy}>Stop</button></div>
           </fieldset>
           <fieldset><legend>Markers</legend>
-            {markers.map((marker, index) => <div className="marker-control" key={marker.color}><label>Marker {index + 1}</label><input defaultValue={formatFrequency(points[marker.index].frequency).replace(' ', '')} key={`${index}-${marker.index}`} onBlur={(e) => setMarkerFrequency(index, e.target.value)} /><span style={{ background: marker.color }} /><input type="radio" name="marker" checked={activeMarker === index} onChange={() => setActiveMarker(index)} /></div>)}
-            <small>Click any plot to move the selected marker.</small>
+            {markers.map((marker, index) => <div className="marker-control" key={marker.id}>
+              <label>Marker {index + 1}</label>
+              <input defaultValue={formatFrequency(points[marker.index].frequency).replace(' ', '')} key={`${marker.id}-${marker.index}`} onBlur={(event) => setMarkerFrequency(index, event.target.value)} />
+              <input className="marker-color" type="color" value={marker.color} onChange={(event) => setMarkerColor(index, event.target.value)} aria-label={`Marker ${index + 1} color`} />
+              <input type="radio" name="marker" checked={activeMarker === index} onChange={() => setActiveMarker(index)} aria-label={`Select marker ${index + 1}`} />
+              <button className="marker-remove" onClick={() => removeMarker(index)} disabled={markers.length <= 1} aria-label={`Remove marker ${index + 1}`}>−</button>
+            </div>)}
+            <div className="marker-actions"><button onClick={addMarker}>Add marker</button><button onClick={() => removeMarker(activeMarker)} disabled={markers.length <= 1}>Remove selected</button></div>
+            <small>Drag a marker on any plot, or enter its frequency.</small>
           </fieldset>
           <fieldset><legend>Measurement summary</legend>
             <div className="summary"><span>Samples:</span><b>{points.length} points</b><span>Frequency step:</span><b>{formatFrequency((points.at(-1)!.frequency - points[0].frequency) / Math.max(1, points.length - 1))}</b><span>−10 dB bandwidth:</span><b>{bw === null ? 'Not found' : formatFrequency(bw)}</b><span>Browser smoothing:</span><b>OFF</b><span>Device calibration:</span><b title={calibrationState}>{calibrationState}</b></div>
@@ -505,15 +586,29 @@ export default function App() {
         </aside>
 
         <section className="readouts-column">
-          {markers.map((marker, index) => <MarkerReadout key={index} point={points[marker.index]} number={index + 1} />)}
+          {markers.map((marker, index) => <MarkerReadout key={marker.id} point={points[marker.index]} number={index + 1} />)}
           <fieldset><legend>Trace colors</legend><div className="trace-key"><span style={{ color: TRACE.magenta }}>━ S11</span><span style={{ color: TRACE.yellow }}>━ S21</span><span style={{ color: TRACE.cyan }}>━ Resistance / conductance</span><span style={{ color: TRACE.red }}>━ Reactance / susceptance</span></div></fieldset>
         </section>
 
         <section className="charts-grid">
-          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} onMarkerChange={updateMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
+          {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} onMarkerChange={updateMarker} onActiveMarkerChange={setActiveMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
         </section>
       </div>
-      <div className="statusbar"><span>{message}</span><span>Units shown on every readout · device data remains local · Protocol reference: <a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a></span></div>
+      <div className="statusbar"><span>{message}</span><span className="status-actions"><a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a><button onClick={() => setAboutOpen(true)}>About</button></span></div>
+      {aboutOpen && <div className="modal-backdrop" onMouseDown={() => setAboutOpen(false)}>
+        <section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="about-titlebar"><h2 id="about-title">NanoVNA Web</h2><button onClick={() => setAboutOpen(false)}>Close</button></div>
+          <div className="about-content">
+            <h3>Connection and data</h3>
+            <p>Device communication uses Web Serial in this browser. Measurement data remains on this computer unless it is exported.</p>
+            <h3>Measurement scope</h3>
+            <p>Browser smoothing is off. Derived views are calculated from the complex S11 and S21 samples. Measurement accuracy depends on the NanoVNA calibration state and firmware.</p>
+            <h3>Credits</h3>
+            <p>This is a separate browser implementation. Its protocol behavior and feature design were informed by <a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a>, created by Rune B. Broberg and maintained by its contributors.</p>
+            <p><a href="https://github.com/mattlmccoy/nanovna-web" target="_blank" rel="noreferrer">Source and notices</a></p>
+          </div>
+        </section>
+      </div>}
     </main>
   );
 }
