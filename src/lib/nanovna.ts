@@ -59,6 +59,7 @@ export class NanoVNAConnection {
   private decoder = new TextDecoder();
   private encoder = new TextEncoder();
   version = 'Unknown firmware';
+  calibration = 'Unknown';
   supportsScan = false;
   supportsScanMask = false;
 
@@ -82,6 +83,9 @@ export class NanoVNAConnection {
       const help = (await this.command('help')).join(' ').toLowerCase();
       this.supportsScan = help.includes('scan') && atLeastVersion(this.version, [0, 2, 0]);
       this.supportsScanMask = help.includes('scan') && atLeastVersion(this.version, [0, 7, 1]);
+      if (help.split(/\s+/).some((entry) => entry.replace(/[^a-z]/g, '') === 'cal')) {
+        this.calibration = (await this.command('cal')).join(' ') || 'Unknown';
+      }
       return this.version;
     } catch (error) {
       await this.disconnect();

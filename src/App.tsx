@@ -44,6 +44,13 @@ function formatFrequency(value: number): string {
   return `${value.toFixed(0)} Hz`;
 }
 
+function formatAxisFrequency(value: number): string {
+  if (value >= 1e9) return `${(value / 1e9).toFixed(2)} GHz`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(2)} MHz`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(1)} kHz`;
+  return `${value.toFixed(0)} Hz`;
+}
+
 function formatNumber(value: number, digits = 3): string {
   if (!Number.isFinite(value)) return '—';
   return value.toFixed(digits);
@@ -248,7 +255,7 @@ function Chart({ mode, points, reference, markers, activeMarker, onMarkerChange,
       const x = area.x + area.w * i / 5;
       ctx.beginPath(); ctx.moveTo(x, area.y); ctx.lineTo(x, area.y + area.h); ctx.stroke();
       const frequency = points[0].frequency + (points.at(-1)!.frequency - points[0].frequency) * i / 5;
-      ctx.fillText(formatFrequency(frequency).replace(' MHz', 'M').replace(' kHz', 'k'), Math.min(width - 55, x - 13), height - 8);
+      ctx.fillText(formatAxisFrequency(frequency), Math.min(width - 58, x - 18), height - 8);
     }
     const positionsBySeries = series.map(({ values, color }) => {
       const positions = values.map((value, index) => ({
@@ -354,6 +361,7 @@ export default function App() {
   const [segments, setSegments] = useState(10);
   const [connected, setConnected] = useState(false);
   const [firmware, setFirmware] = useState('No device');
+  const [calibrationState, setCalibrationState] = useState('Unknown');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [continuous, setContinuous] = useState(false);
@@ -386,6 +394,7 @@ export default function App() {
       connectionRef.current = null;
       setConnected(false);
       setFirmware('No device');
+      setCalibrationState('Unknown');
       setMessage('Disconnected. Existing measurement remains displayed.');
       return;
     }
@@ -401,6 +410,7 @@ export default function App() {
       connectionRef.current = connection;
       setConnected(true);
       setFirmware(version);
+      setCalibrationState(connection.calibration);
       setMessage(`Connected at 115200 baud · ${version}`);
     } catch (error) { setMessage(`Connection failed: ${(error as Error).message}`); }
     finally { setBusy(false); }
@@ -417,7 +427,7 @@ export default function App() {
           setPoints(data);
           const minimum = markerIndex(data);
           setMarkers((current) => current.map((marker, index) => ({ ...marker, index: index === 0 ? minimum : Math.min(marker.index, data.length - 1) })));
-          setMessage(`Sweep complete · ${data.length} samples · browser smoothing OFF · device calibration state unknown.`);
+          setMessage(`Sweep complete · ${data.length} samples · browser smoothing OFF · device calibration: ${calibrationState}.`);
         }
       } while (continuous && !stopRequestedRef.current);
     } catch (error) { setMessage(`Sweep failed: ${(error as Error).message}`); }
@@ -473,7 +483,7 @@ export default function App() {
             <small>Click any plot to move the selected marker.</small>
           </fieldset>
           <fieldset><legend>Measurement summary</legend>
-            <div className="summary"><span>Samples:</span><b>{points.length} points</b><span>Frequency step:</span><b>{formatFrequency((points.at(-1)!.frequency - points[0].frequency) / Math.max(1, points.length - 1))}</b><span>−10 dB bandwidth:</span><b>{bw === null ? 'Not found' : formatFrequency(bw)}</b><span>Browser smoothing:</span><b>OFF</b><span>Device calibration:</span><b>Unknown</b></div>
+            <div className="summary"><span>Samples:</span><b>{points.length} points</b><span>Frequency step:</span><b>{formatFrequency((points.at(-1)!.frequency - points[0].frequency) / Math.max(1, points.length - 1))}</b><span>−10 dB bandwidth:</span><b>{bw === null ? 'Not found' : formatFrequency(bw)}</b><span>Browser smoothing:</span><b>OFF</b><span>Device calibration:</span><b title={calibrationState}>{calibrationState}</b></div>
           </fieldset>
           <fieldset><legend>Reference sweep</legend><button className="wide" onClick={() => setReference(points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })))}>Set current as reference</button><button className="wide" onClick={() => setReference(null)} disabled={!reference}>Clear reference</button><small>{reference ? `${reference.length} reference points · dashed gray trace` : 'No reference trace loaded'}</small></fieldset>
           <fieldset><legend>Serial port control</legend>

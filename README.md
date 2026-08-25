@@ -5,6 +5,7 @@ Browser interface for NanoVNA devices.
 ## Current functionality
 
 - Direct USB serial connection at 115200 baud in desktop Chrome and Edge
+- Firmware and device-reported calibration-state readout when supported
 - NanoVNA shell support for `version`, `help`, `sweep`, `scan`, `frequencies`, `data 0`, and `data 1`
 - Multi-segment S11/S21 sweeps
 - Single and continuous sweep modes with segment-boundary stop handling
