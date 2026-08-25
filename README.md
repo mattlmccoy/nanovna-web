@@ -48,4 +48,4 @@ Behavior must be checked against the target device and firmware. Compare a calib
 
 The device protocol, sweep behavior, and feature set were studied against the original [NanoVNA Saver](https://github.com/NanoVNA-Saver/nanovna-saver) project created by Rune B. Broberg and maintained by its open-source contributors. NanoVNA Saver is distributed under [GPL-3.0-or-later](https://github.com/NanoVNA-Saver/nanovna-saver/blob/master/licenses/LICENSE.txt).
 
-NanoVNA Web is an independent browser implementation and does not bundle NanoVNA Saver's Python or Qt source code. See [NOTICE.md](NOTICE.md).
+NanoVNA Web is a separate TypeScript/browser implementation. It does not include NanoVNA Saver source files. Its protocol behavior and feature design were informed by NanoVNA Saver. See [NOTICE.md](NOTICE.md).
