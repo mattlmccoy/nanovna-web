@@ -7,6 +7,7 @@ import { AnalysisPanel } from './components/AnalysisPanel';
 import { TdrPanel } from './components/TdrPanel';
 import { DEFAULT_DISPLAY_SETTINGS, DisplaySettingsPanel, type DisplaySettings } from './components/DisplaySettingsPanel';
 import { InstrumentPanel, type InstrumentReference } from './components/InstrumentPanel';
+import { DraftNumberInput } from './components/DraftNumberInput';
 
 type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's21-magnitude' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
 type Marker = { id: number; index: number; color: string };
@@ -697,6 +698,38 @@ function MarkerReadout({ point, number }: { point: SweepPoint; number: number })
   );
 }
 
+function MarkerFrequencyInput({ frequency, onCommit }: { frequency: number; onCommit: (value: string) => number | null }) {
+  const formatted = formatFrequency(frequency).replace(' ', '');
+  const [draft, setDraft] = useState(formatted);
+  const editingRef = useRef(false);
+  const skipBlurCommitRef = useRef(false);
+
+  useEffect(() => {
+    if (!editingRef.current) setDraft(formatted);
+  }, [formatted]);
+
+  function commit() {
+    const acceptedFrequency = onCommit(draft);
+    if (acceptedFrequency === null) { setDraft(formatted); return; }
+    setDraft(formatFrequency(acceptedFrequency).replace(' ', ''));
+  }
+
+  return <input
+    value={draft}
+    onFocus={() => { editingRef.current = true; }}
+    onChange={(event) => setDraft(event.target.value)}
+    onBlur={() => {
+      editingRef.current = false;
+      if (skipBlurCommitRef.current) skipBlurCommitRef.current = false;
+      else commit();
+    }}
+    onKeyDown={(event) => {
+      if (event.key === 'Enter') { event.preventDefault(); commit(); }
+      else if (event.key === 'Escape') { event.preventDefault(); skipBlurCommitRef.current = true; setDraft(formatted); event.currentTarget.blur(); }
+    }}
+  />;
+}
+
 function DeltaMarkerReadout({ first, second, referenceMode }: { first: SweepPoint; second: SweepPoint; referenceMode: boolean }) {
   const firstZ = impedance(first.s11);
   const secondZ = impedance(second.s11);
@@ -1198,17 +1231,17 @@ export default function App() {
       <div className="main-grid">
         <aside className="controls-column">
           <fieldset><legend>Sweep control</legend>
-            <div className="form-grid"><label>Start</label><input value={start} onChange={(e) => setStart(e.target.value)} /><label>Stop</label><input value={stop} onChange={(e) => setStop(e.target.value)} /><label>Points / segment</label><select value={pointCount} onChange={(e) => setPointCount(Number(e.target.value))}>{[11, 51, 101, 201, 301, 401, 801].map((value) => <option key={value}>{value}</option>)}</select><label>Segments</label><input type="number" min="1" max="100" value={segments} onChange={(e) => setSegments(Number(e.target.value))} /></div>
+            <div className="form-grid"><label>Start</label><input value={start} onChange={(e) => setStart(e.target.value)} /><label>Stop</label><input value={stop} onChange={(e) => setStop(e.target.value)} /><label>Points / segment</label><select value={pointCount} onChange={(e) => setPointCount(Number(e.target.value))}>{[11, 51, 101, 201, 301, 401, 801].map((value) => <option key={value}>{value}</option>)}</select><label>Segments</label><DraftNumberInput min="1" max="100" step="1" value={segments} onCommit={setSegments} /></div>
             <label className="check-row"><input type="checkbox" checked={continuous} onChange={(e) => setContinuous(e.target.checked)} /> Continuous sweep</label>
             <label className="check-row"><input type="checkbox" checked={logarithmicSweep} onChange={(event) => setLogarithmicSweep(event.target.checked)} /> Logarithmic segment spacing</label>
-            <details className="sweep-processing"><summary>Averaging</summary><div className="form-grid"><label>Measurements</label><input type="number" min="1" max="99" value={averages} onChange={(event) => { const value = Math.max(1, Math.min(99, Math.round(Number(event.target.value) || 1))); setAverages(value); setTruncateCount((current) => Math.min(current, value - 1)); }} /><label>Discard outliers</label><input type="number" min="0" max={Math.max(0, averages - 1)} value={truncateCount} onChange={(event) => setTruncateCount(Math.max(0, Math.min(averages - 1, Math.round(Number(event.target.value) || 0))))} /></div><small>Averaging is OFF at 1. Higher values alter the data and are labeled in plot exports.</small></details>
+            <details className="sweep-processing"><summary>Averaging</summary><div className="form-grid"><label>Measurements</label><DraftNumberInput min="1" max="99" step="1" value={averages} onCommit={(value) => { setAverages(value); setTruncateCount((current) => Math.min(current, value - 1)); }} /><label>Discard outliers</label><DraftNumberInput min="0" max={Math.max(0, averages - 1)} step="1" value={truncateCount} onCommit={setTruncateCount} /></div><small>Averaging is OFF at 1. Higher values alter the data and are labeled in plot exports.</small></details>
             <div className="progress"><i style={{ width: `${progress * 100}%` }} /></div>
             <div className="sweep-buttons"><button onClick={runSweep} disabled={busy || !connected}>Sweep</button><button onClick={stopSweep} disabled={!busy}>Stop</button></div>
           </fieldset>
           <fieldset><legend>Markers</legend>
             {markers.map((marker, index) => <div className="marker-control" key={marker.id}>
               <label>Marker {index + 1}</label>
-              <input defaultValue={formatFrequency(points[marker.index].frequency).replace(' ', '')} key={`${marker.id}-${marker.index}`} onBlur={(event) => { if (event.currentTarget.dataset.enterCommitted === 'true') { delete event.currentTarget.dataset.enterCommitted; return; } const accepted = setMarkerFrequency(index, event.currentTarget.value); if (accepted !== null) event.currentTarget.value = formatFrequency(points[accepted].frequency).replace(' ', ''); }} onKeyDown={(event) => { if (event.key !== 'Enter') return; event.preventDefault(); const accepted = setMarkerFrequency(index, event.currentTarget.value); if (accepted !== null) event.currentTarget.value = formatFrequency(points[accepted].frequency).replace(' ', ''); event.currentTarget.dataset.enterCommitted = 'true'; event.currentTarget.blur(); }} />
+              <MarkerFrequencyInput frequency={points[marker.index].frequency} onCommit={(value) => { const accepted = setMarkerFrequency(index, value); return accepted === null ? null : points[accepted].frequency; }} />
               <input className="marker-color" type="color" value={marker.color} onChange={(event) => setMarkerColor(index, event.target.value)} aria-label={`Marker ${index + 1} color`} />
               <input type="radio" name="marker" checked={activeMarker === index} onChange={() => setActiveMarker(index)} aria-label={`Select marker ${index + 1}`} />
               <button className="marker-remove" onClick={() => removeMarker(index)} disabled={markers.length <= 1} aria-label={`Remove marker ${index + 1}`}>−</button>

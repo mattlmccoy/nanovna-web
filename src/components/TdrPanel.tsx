@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { computeBandpassTdr, computeLowpassTdr, type LowpassTdrFormat, type TdrWindow } from '../lib/tdr';
 import type { SweepPoint } from '../lib/rf';
+import { DraftNumberInput } from './DraftNumberInput';
 
 function number(value: number, digits = 3) { return Number.isFinite(value) ? value.toFixed(digits) : '—'; }
 
@@ -62,7 +63,7 @@ export function TdrPanel({ points, sourceName, onClose }: { points: SweepPoint[]
     <section className="about-dialog tdr-dialog" role="dialog" aria-modal="true" aria-labelledby="tdr-title" onMouseDown={(event) => event.stopPropagation()}>
       <div className="about-titlebar"><h2 id="tdr-title">Time Domain Reflectometry</h2><button onClick={onClose}>Close</button></div>
       <div className="tdr-controls">
-        <label>Velocity factor<input type="number" min="0.01" max="1" step="0.01" value={velocity} onChange={(event) => setVelocity(Number(event.target.value))} /></label>
+        <label>Velocity factor<DraftNumberInput min="0.01" max="1" step="0.01" value={velocity} onCommit={setVelocity} /></label>
         <label>Window<select value={tdrWindow} onChange={(event) => setTdrWindow(event.target.value as TdrWindow)}><option value="rectangular">Rectangular</option><option value="hann">Hann</option><option value="hamming">Hamming</option><option value="blackman">Blackman</option></select></label>
         <label>Format<select value={format} onChange={(event) => setFormat(event.target.value as 'bandpass' | LowpassTdrFormat)}><option value="bandpass">Reflection magnitude (bandpass)</option><option value="reflection">Reflection impulse (low-pass)</option><option value="impedance">Impedance step (low-pass)</option><option value="s11-db">S11 step (low-pass)</option><option value="vswr">VSWR step (low-pass)</option></select></label>
       </div>

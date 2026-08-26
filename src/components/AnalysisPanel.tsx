@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { runAnalysis, type AnalysisMode, type PeakMetric } from '../lib/analysis';
 import type { SweepPoint } from '../lib/rf';
+import { DraftNumberInput } from './DraftNumberInput';
 
 const MODE_LABELS: Record<AnalysisMode, string> = {
   overview: 'Sweep overview',
@@ -26,11 +27,11 @@ export function AnalysisPanel({ points, live, processing, onMoveMarkers }: { poi
     <summary><span>Analysis</span><i className={live ? 'live' : ''}>{live ? 'LIVE' : 'CURRENT DATA'}{processing.includes('complex mean') ? ' · AVERAGED' : ''}</i></summary>
     <div className="analysis-panel-content">
       <label>Analysis type<select value={mode} onChange={(event) => setMode(event.target.value as AnalysisMode)}>{Object.entries(MODE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-      {mode === 'vswr' && <label>VSWR limit<input type="number" min="1" max="25" step="0.1" value={vswrLimit} onChange={(event) => setVswrLimit(Number(event.target.value))} /></label>}
+      {mode === 'vswr' && <label>VSWR limit<DraftNumberInput min="1" max="25" step="0.1" value={vswrLimit} onCommit={setVswrLimit} /></label>}
       {mode === 'peak' && <div className="analysis-options">
         <label>Data<select value={peakMetric} onChange={(event) => setPeakMetric(event.target.value as PeakMetric)}><option value="s21-db">S21 gain</option><option value="s11-db">S11 log magnitude</option><option value="vswr">VSWR</option><option value="resistance">Resistance</option><option value="reactance">Reactance</option></select></label>
         <label>Peak<select value={peakDirection} onChange={(event) => setPeakDirection(event.target.value as 'highest' | 'lowest')}><option value="highest">Highest</option><option value="lowest">Lowest</option></select></label>
-        <label>Count<input type="number" min="1" max="10" value={peakCount} onChange={(event) => setPeakCount(Number(event.target.value))} /></label>
+        <label>Count<DraftNumberInput min="1" max="10" step="1" value={peakCount} onCommit={setPeakCount} /></label>
       </div>}
       <div className="analysis-result"><b>{result.title}</b><p>{result.summary}</p>
         {result.rows.length > 0 && <dl>{result.rows.map((row, index) => <div key={`${row.label}-${index}`}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl>}

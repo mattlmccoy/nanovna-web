@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SweepPoint } from '../lib/rf';
 import { computeSonificationTarget, gridsMatch } from '../lib/sonification';
+import { DraftNumberInput } from './DraftNumberInput';
 
 type OscillatorShape = OscillatorType;
 
@@ -9,7 +10,6 @@ export interface InstrumentReference extends InstrumentContext { points: SweepPo
 interface AudioNodes { context: AudioContext; oscillator: OscillatorNode; gain: GainNode; limiter: DynamicsCompressorNode; recordingDestination: MediaStreamAudioDestinationNode; }
 interface RecordingSession { recorder: MediaRecorder; chunks: Blob[]; telemetry: string[]; startedAt: number; startedPerformance: number; startedAudioTime: number; mimeType: string; cancelled: boolean; }
 
-function clamp(value: number, minimum: number, maximum: number) { return Math.max(minimum, Math.min(maximum, value)); }
 function formatNumber(value: number, digits = 3) { return Number.isFinite(value) ? value.toFixed(digits) : '—'; }
 function formatFrequency(value: number) {
   if (value >= 1e9) return `${(value / 1e9).toFixed(6)} GHz`;
@@ -277,12 +277,12 @@ export function InstrumentPanel({ points, markerIndex, reference, currentContext
     <div className="instrument-status"><span>Tracking</span><b>Marker at {point ? formatFrequency(point.frequency) : '—'}</b><span>Reference</span><b>{referenceState}</b><span>Data</span><b>{dataState}</b><span>Audio</span><b>{audioState}</b></div>
     <div className="form-grid instrument-settings">
       <label>Waveform</label><select value={shape} onChange={(event) => setShape(event.target.value as OscillatorShape)}><option value="sine">Sine</option><option value="triangle">Triangle</option><option value="sawtooth">Sawtooth</option><option value="square">Square</option></select>
-      <label>Base pitch (Hz)</label><input type="number" min="80" max="2000" value={baseFrequency} onChange={(event) => setBaseFrequency(clamp(Number(event.target.value) || 220, 80, 2000))} />
-      <label>Reactance Ω/octave</label><input type="number" min="1" max="1000" value={reactancePerOctave} onChange={(event) => setReactancePerOctave(clamp(Number(event.target.value) || 75, 1, 1000))} />
+      <label>Base pitch (Hz)</label><DraftNumberInput min="80" max="2000" value={baseFrequency} onCommit={setBaseFrequency} />
+      <label>Reactance Ω/octave</label><DraftNumberInput min="1" max="1000" value={reactancePerOctave} onCommit={setReactancePerOctave} />
       <label>Pitch direction</label><select value={pitchDirection} onChange={(event) => setPitchDirection(Number(event.target.value) as 1 | -1)}><option value={-1}>Negative ΔX raises pitch</option><option value={1}>Positive ΔX raises pitch</option></select>
-      <label>Full volume |ΔZ| (Ω)</label><input type="number" min="1" max="1000" value={fullVolumeChange} onChange={(event) => setFullVolumeChange(clamp(Number(event.target.value) || 100, 1, 1000))} />
-      <label>Silent deadband (Ω)</label><input type="number" min="0" max="100" step="0.05" value={deadband} onChange={(event) => setDeadband(clamp(Number(event.target.value) || 0, 0, 100))} />
-      <label>Glide (ms)</label><input type="number" min="10" max="500" step="5" value={smoothingMs} onChange={(event) => setSmoothingMs(clamp(Number(event.target.value) || 35, 10, 500))} />
+      <label>Full volume |ΔZ| (Ω)</label><DraftNumberInput min="1" max="1000" value={fullVolumeChange} onCommit={setFullVolumeChange} />
+      <label>Silent deadband (Ω)</label><DraftNumberInput min="0" max="100" step="0.05" value={deadband} onCommit={setDeadband} />
+      <label>Glide (ms)</label><DraftNumberInput min="10" max="500" step="5" value={smoothingMs} onCommit={setSmoothingMs} />
       <label>Maximum gain</label><input type="range" min="0.005" max="0.05" step="0.005" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
     </div>
     {response && <div className="instrument-status"><span>Reference frequency</span><b>{formatFrequency(referencePoint!.frequency)}</b><span>Resistance Δ</span><b>{formatNumber(response.resistanceDelta)} Ω</b><span>Reactance Δ</span><b>{formatNumber(response.reactanceDelta)} Ω</b><span>|ΔZ|</span><b>{formatNumber(response.totalChange)} Ω</b><span>Tone target</span><b>{formatNumber(response.frequency, 1)} Hz</b><span>Gain target</span><b>{formatNumber(response.gain, 3)}</b></div>}

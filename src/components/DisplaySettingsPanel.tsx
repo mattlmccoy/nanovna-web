@@ -1,3 +1,5 @@
+import { DraftNumberInput } from './DraftNumberInput';
+
 export interface FrequencyBand {
   id: number;
   name: string;
@@ -34,11 +36,6 @@ export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
   colors: { magenta: '#a9008b', yellow: '#e2aa00', cyan: '#009d9a', red: '#d7191c', green: '#20aa35', blue: '#173de3' },
 };
 
-function numberValue(value: string, fallback: number) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 export function DisplaySettingsPanel({ settings, onChange, onClose }: { settings: DisplaySettings; onChange: (settings: DisplaySettings) => void; onClose: () => void }) {
   const update = <K extends keyof DisplaySettings>(key: K, value: DisplaySettings[K]) => onChange({ ...settings, [key]: value });
   const updateBand = (id: number, patch: Partial<FrequencyBand>) => update('bands', settings.bands.map((band) => band.id === id ? { ...band, ...patch } : band));
@@ -48,7 +45,7 @@ export function DisplaySettingsPanel({ settings, onChange, onClose }: { settings
       <div className="display-settings-grid">
         <fieldset><legend>Traces and markers</legend>
           <label className="check-row"><input type="checkbox" checked={settings.connectPoints} onChange={(event) => update('connectPoints', event.target.checked)} /> Connect acquired points</label>
-          <div className="form-grid"><label>Point size</label><input type="number" min="0" max="8" step="0.5" value={settings.pointSize} onChange={(event) => update('pointSize', Math.max(0, numberValue(event.target.value, 1)))} /><label>Line thickness</label><input type="number" min="0.5" max="6" step="0.25" value={settings.lineWidth} onChange={(event) => update('lineWidth', Math.max(.5, numberValue(event.target.value, 1.45)))} /><label>Marker size</label><input type="number" min="4" max="20" value={settings.markerSize} onChange={(event) => update('markerSize', Math.max(4, numberValue(event.target.value, 8)))} /></div>
+          <div className="form-grid"><label>Point size</label><DraftNumberInput min="0" max="8" step="0.5" value={settings.pointSize} onCommit={(value) => update('pointSize', value)} /><label>Line thickness</label><DraftNumberInput min="0.5" max="6" step="0.25" value={settings.lineWidth} onCommit={(value) => update('lineWidth', value)} /><label>Marker size</label><DraftNumberInput min="4" max="20" step="1" value={settings.markerSize} onCommit={(value) => update('markerSize', value)} /></div>
           <label className="check-row"><input type="checkbox" checked={settings.showMarkerNumbers} onChange={(event) => update('showMarkerNumbers', event.target.checked)} /> Show marker numbers</label>
           <label className="check-row"><input type="checkbox" checked={settings.filledMarkers} onChange={(event) => update('filledMarkers', event.target.checked)} /> Filled markers</label>
         </fieldset>
@@ -57,7 +54,7 @@ export function DisplaySettingsPanel({ settings, onChange, onClose }: { settings
         </fieldset>
         <fieldset className="bands-settings"><legend>Frequency bands</legend>
           <label className="check-row"><input type="checkbox" checked={settings.showBands} onChange={(event) => update('showBands', event.target.checked)} /> Show bands on frequency plots</label>
-          {settings.bands.map((band) => <div className="band-row" key={band.id}><input aria-label="Band name" value={band.name} onChange={(event) => updateBand(band.id, { name: event.target.value })} /><input aria-label="Band start in hertz" type="number" value={band.start} onChange={(event) => updateBand(band.id, { start: numberValue(event.target.value, band.start) })} /><input aria-label="Band stop in hertz" type="number" value={band.stop} onChange={(event) => updateBand(band.id, { stop: numberValue(event.target.value, band.stop) })} /><input aria-label="Band color" type="color" value={band.color} onChange={(event) => updateBand(band.id, { color: event.target.value })} /><button onClick={() => update('bands', settings.bands.filter((candidate) => candidate.id !== band.id))}>Remove</button></div>)}
+          {settings.bands.map((band) => <div className="band-row" key={band.id}><input aria-label="Band name" value={band.name} onChange={(event) => updateBand(band.id, { name: event.target.value })} /><DraftNumberInput aria-label="Band start in hertz" min="0" value={band.start} onCommit={(value) => updateBand(band.id, { start: value })} /><DraftNumberInput aria-label="Band stop in hertz" min="0" value={band.stop} onCommit={(value) => updateBand(band.id, { stop: value })} /><input aria-label="Band color" type="color" value={band.color} onChange={(event) => updateBand(band.id, { color: event.target.value })} /><button onClick={() => update('bands', settings.bands.filter((candidate) => candidate.id !== band.id))}>Remove</button></div>)}
           <button onClick={() => update('bands', [...settings.bands, { id: Date.now(), name: `Band ${settings.bands.length + 1}`, start: 1e6, stop: 2e6, color: '#f1d51c' }])}>Add band</button>
           <small>Band start and stop values are in hertz.</small>
         </fieldset>
