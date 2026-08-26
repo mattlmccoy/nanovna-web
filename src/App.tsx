@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { NanoVNAConnection, type CalibrationStep, type NanoVNACapabilities } from './lib/nanovna';
 import { parseMeasurementFile } from './lib/files';
 import { bandwidth, db, demoSweep, impedance, magnitude, markerIndex, nearestPointByFrequency, phase, reflectedPowerPercent, type Complex, type SweepPoint, vswr } from './lib/rf';
@@ -285,7 +285,9 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
   const geometryRef = useRef<{ x: number; y: number; w: number; h: number; smith: boolean }>({ x: 0, y: 0, w: 0, h: 0, smith: false });
   const pointPositionsRef = useRef<Array<{ x: number; y: number }>>([]);
   const draggingMarkerRef = useRef<number | null>(null);
+  const resizeDragRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const [resizeVersion, setResizeVersion] = useState(0);
+  const [panelHeight, setPanelHeight] = useState(360);
   const [viewHelpOpen, setViewHelpOpen] = useState(false);
   const delayValues = useMemo(() => {
     if (mode === 's11-group-delay') return groupDelay(points, 's11');
@@ -535,6 +537,34 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
     onMarkerChange(marker, index);
   }
 
+  function setClampedPanelHeight(height: number) {
+    setPanelHeight(Math.max(300, Math.min(800, Math.round(height))));
+  }
+
+  function beginPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeDragRef.current = { startY: event.clientY, startHeight: panelHeight };
+  }
+
+  function continuePanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = resizeDragRef.current;
+    if (!drag) return;
+    setClampedPanelHeight(drag.startHeight + event.clientY - drag.startY);
+  }
+
+  function finishPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    resizeDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
+  function resizePanelFromKeyboard(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const increment = event.shiftKey ? 60 : 20;
+    if (event.key === 'ArrowUp') { event.preventDefault(); setClampedPanelHeight(panelHeight - increment); }
+    if (event.key === 'ArrowDown') { event.preventDefault(); setClampedPanelHeight(panelHeight + increment); }
+    if (event.key === 'Home') { event.preventDefault(); setPanelHeight(360); }
+  }
+
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rect.left;
@@ -611,7 +641,7 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
   }
 
   return (
-    <section className="chart-panel">
+    <section className="chart-panel" style={{ '--chart-height': `${panelHeight}px` } as React.CSSProperties}>
       <div className="chart-titlebar">
         <select value={mode} onChange={(event) => onModeChange(event.target.value as ViewMode)} aria-label="Diagnostic view">
           {Object.entries(VIEW_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -637,6 +667,12 @@ function Chart({ mode, points, reference, markers, activeMarker, theme, exportCo
             </button>;
           })}
         </div>
+      </div>
+      <div className="chart-resizebar">
+        <button onClick={() => setClampedPanelHeight(panelHeight - 60)} disabled={panelHeight <= 300} aria-label={`Reduce ${VIEW_LABELS[mode]} height`}>−</button>
+        <div className="chart-resize-handle" role="separator" aria-label={`Resize ${VIEW_LABELS[mode]} vertically`} aria-orientation="horizontal" aria-valuemin={300} aria-valuemax={800} aria-valuenow={panelHeight} tabIndex={0} onPointerDown={beginPanelResize} onPointerMove={continuePanelResize} onPointerUp={finishPanelResize} onPointerCancel={finishPanelResize} onKeyDown={resizePanelFromKeyboard}><span /></div>
+        <button onClick={() => setClampedPanelHeight(panelHeight + 60)} disabled={panelHeight >= 800} aria-label={`Increase ${VIEW_LABELS[mode]} height`}>+</button>
+        <button onClick={() => setPanelHeight(360)} disabled={panelHeight === 360}>Reset</button>
       </div>
     </section>
   );
