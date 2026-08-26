@@ -777,7 +777,7 @@ export default function App() {
     let cancelled = false;
     lastFollowUpdateRef.current = null;
     followIntervalsRef.current = [];
-    const wait = () => new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+    const wait = () => new Promise<void>((resolve) => { setTimeout(resolve, 200); });
     const follow = async () => {
       while (!cancelled) {
         try {
@@ -796,7 +796,7 @@ export default function App() {
           }
           const intervals = followIntervalsRef.current;
           const medianInterval = intervals.length ? [...intervals].sort((a, b) => a - b)[Math.floor(intervals.length / 2)] : null;
-          const updateRate = medianInterval ? `${(1000 / medianInterval).toFixed(1)} updates/s` : 'measuring update rate';
+          const updateRate = medianInterval ? `${(1000 / medianInterval).toFixed(1)} buffer reads/s` : 'measuring buffer read rate';
           setFollowStatus(`${data.length} samples · ${formatFrequency(data[0].frequency)} – ${formatFrequency(data.at(-1)!.frequency)} · ${updateRate} · updated ${new Date().toLocaleTimeString()}`);
         } catch (error) {
           if (cancelled) break;
