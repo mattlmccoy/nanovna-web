@@ -55,7 +55,7 @@ export function InstrumentPanel({ points, markerIndex, reference, currentContext
   const [fullVolumeChange, setFullVolumeChange] = useState(100);
   const [deadband, setDeadband] = useState(.25);
   const [volume, setVolume] = useState(.03);
-  const [smoothingMs, setSmoothingMs] = useState(80);
+  const [smoothingMs, setSmoothingMs] = useState(35);
   const [shape, setShape] = useState<OscillatorShape>('sine');
   const smoothingSeconds = smoothingMs / 1000;
   const safeIndex = Math.min(markerIndex, Math.max(0, points.length - 1));
@@ -282,7 +282,7 @@ export function InstrumentPanel({ points, markerIndex, reference, currentContext
       <label>Pitch direction</label><select value={pitchDirection} onChange={(event) => setPitchDirection(Number(event.target.value) as 1 | -1)}><option value={-1}>Negative ΔX raises pitch</option><option value={1}>Positive ΔX raises pitch</option></select>
       <label>Full volume |ΔZ| (Ω)</label><input type="number" min="1" max="1000" value={fullVolumeChange} onChange={(event) => setFullVolumeChange(clamp(Number(event.target.value) || 100, 1, 1000))} />
       <label>Silent deadband (Ω)</label><input type="number" min="0" max="100" step="0.05" value={deadband} onChange={(event) => setDeadband(clamp(Number(event.target.value) || 0, 0, 100))} />
-      <label>Glide (ms)</label><input type="number" min="10" max="500" step="5" value={smoothingMs} onChange={(event) => setSmoothingMs(clamp(Number(event.target.value) || 80, 10, 500))} />
+      <label>Glide (ms)</label><input type="number" min="10" max="500" step="5" value={smoothingMs} onChange={(event) => setSmoothingMs(clamp(Number(event.target.value) || 35, 10, 500))} />
       <label>Maximum gain</label><input type="range" min="0.005" max="0.05" step="0.005" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
     </div>
     {response && <div className="instrument-status"><span>Reference frequency</span><b>{formatFrequency(referencePoint!.frequency)}</b><span>Resistance Δ</span><b>{formatNumber(response.resistanceDelta)} Ω</b><span>Reactance Δ</span><b>{formatNumber(response.reactanceDelta)} Ω</b><span>|ΔZ|</span><b>{formatNumber(response.totalChange)} Ω</b><span>Tone target</span><b>{formatNumber(response.frequency, 1)} Hz</b><span>Gain target</span><b>{formatNumber(response.gain, 3)}</b></div>}

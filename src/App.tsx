@@ -679,6 +679,8 @@ export default function App() {
   const connectionRef = useRef<NanoVNAConnection | null>(null);
   const stopRequestedRef = useRef(false);
   const markerIdRef = useRef(4);
+  const lastFollowUpdateRef = useRef<number | null>(null);
+  const followIntervalsRef = useRef<number[]>([]);
   const [points, setPoints] = useState(() => demoSweep(1e6, 51e6, 1001));
   const pointsRef = useRef(points);
   const [reference, setReference] = useState<SweepPoint[] | null>(null);
@@ -773,7 +775,9 @@ export default function App() {
     if (!connected || !followDevice || busy || !capabilities.currentData || !connectionRef.current) return;
     const connection = connectionRef.current;
     let cancelled = false;
-    const wait = () => new Promise<void>((resolve) => { setTimeout(resolve, 200); });
+    lastFollowUpdateRef.current = null;
+    followIntervalsRef.current = [];
+    const wait = () => new Promise<void>((resolve) => { setTimeout(resolve, 20); });
     const follow = async () => {
       while (!cancelled) {
         try {
@@ -783,7 +787,17 @@ export default function App() {
           remapMarkersToFrequencies(data);
           setSourceInfo({ sourceName: `${firmware} current device buffers`, sourceKind: 'device', device: firmware, calibration: calibrationState });
           setProgress(1);
-          setFollowStatus(`${data.length} samples · ${formatFrequency(data[0].frequency)} – ${formatFrequency(data.at(-1)!.frequency)} · updated ${new Date().toLocaleTimeString()}`);
+          const now = performance.now();
+          const previous = lastFollowUpdateRef.current;
+          lastFollowUpdateRef.current = now;
+          if (previous !== null) {
+            followIntervalsRef.current.push(now - previous);
+            if (followIntervalsRef.current.length > 20) followIntervalsRef.current.shift();
+          }
+          const intervals = followIntervalsRef.current;
+          const medianInterval = intervals.length ? [...intervals].sort((a, b) => a - b)[Math.floor(intervals.length / 2)] : null;
+          const updateRate = medianInterval ? `${(1000 / medianInterval).toFixed(1)} updates/s` : 'measuring update rate';
+          setFollowStatus(`${data.length} samples · ${formatFrequency(data[0].frequency)} – ${formatFrequency(data.at(-1)!.frequency)} · ${updateRate} · updated ${new Date().toLocaleTimeString()}`);
         } catch (error) {
           if (cancelled) break;
           const detail = (error as Error).message;
