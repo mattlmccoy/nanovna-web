@@ -114,6 +114,10 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .media-preview { width: 100%; max-height: 124px; border: 1px solid var(--edge); border-radius: 3px; background: #111; object-fit: cover; }
 .media-download { padding: 7px 9px; border: 1px solid var(--edge); border-radius: 3px; color: inherit; text-align: center; text-decoration: none; }
 .automatic-capture .media-download, .automatic-capture .stale-status { grid-column: 1 / -1; }
+.mapping-recommendation { display: grid; max-width: 1180px; box-sizing: border-box; margin: 0 auto 10px; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 6px 12px; padding: 9px 11px; border: 1px solid var(--edge); border-left: 4px solid var(--cyan); background: var(--surface); }
+.mapping-recommendation > span:first-child { color: var(--muted); font-size: 9px; text-transform: uppercase; }
+.mapping-recommendation > b { font-family: 'SFMono-Regular', Consolas, monospace; }
+.mapping-recommendation small { grid-column: 1 / -1; margin: 0; }
 .sync-overlay { position: fixed; z-index: 100; inset: 0; display: grid; place-content: center; background: rgba(18,18,18,.78); color: white; text-align: center; pointer-events: none; }
 .sync-overlay b { font: 800 min(28vw, 220px)/.9 'SFMono-Regular', Consolas, monospace; }
 .sync-overlay span { margin-top: 18px; font-size: 18px; letter-spacing: .08em; text-transform: uppercase; }
@@ -121,6 +125,9 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .differential-grid { display: grid; max-width: 1180px; margin: 0 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .differential-grid fieldset { align-self: start; }
 .differential-grid fieldset > label { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(90px, 1fr) auto; align-items: center; gap: 7px; margin: 7px 0; }
+.experiment-metadata { display: grid; gap: 5px; margin-bottom: 8px; }
+.experiment-metadata label { display: grid; grid-template-columns: minmax(105px, .8fr) minmax(0, 1.4fr); align-items: center; gap: 7px; }
+.experiment-metadata textarea { box-sizing: border-box; width: 100%; resize: vertical; }
 .differential-event { min-width: 130px; padding: 10px 14px; border: 1px solid var(--edge); border-left: 5px solid #777; background: var(--surface); }
 .differential-event span, .differential-event b { display: block; }
 .differential-event span { color: #666; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }

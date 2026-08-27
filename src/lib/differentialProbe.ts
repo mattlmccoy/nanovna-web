@@ -33,6 +33,31 @@ export interface DifferentialScore {
   excess: number;
 }
 
+export interface DifferentialBand { startHz: number; stopHz: number; peakHz: number; peakDistance: number; pointCount: number; }
+export interface DifferentialSweepAnalysis {
+  valid: boolean;
+  affectedPointCount: number;
+  affectedFraction: number;
+  maximumDistance: number;
+  medianDistance: number;
+  rmsDistance: number;
+  bands: DifferentialBand[];
+  baselineResonanceHz: number;
+  liveResonanceHz: number;
+  resonanceShiftHz: number;
+  classification: 'quiet' | 'localized' | 'multi-region' | 'broadband';
+}
+
+export interface BaselineStability {
+  ready: boolean;
+  reason: string;
+  sweepCount: number;
+  drift95: number;
+  driftToThresholdRatio: number;
+  validationFalseAlarmFraction: number;
+}
+export interface AudioMappingRecommendation { mode: 'fixed-channel' | 'resonance-pitch' | 'feature-tones' | 'broadband-timbre'; pitchMeaning: string; loudnessMeaning: string; secondaryMeaning: string; reason: string; }
+
 function quantile(values: number[], probability: number) {
   if (!values.length) return Number.NaN;
   const sorted = values.slice().sort((a, b) => a - b);
@@ -110,4 +135,47 @@ export function scoreDifferentialPoint(point: SweepPoint, baseline: Differential
 export function scoreDifferentialSweep(points: SweepPoint[], baseline: DifferentialBaseline): DifferentialScore[] {
   if (points.length !== baseline.frequencies.length) return [];
   return points.map((point, index) => scoreDifferentialPoint(point, baseline, index));
+}
+
+export function analyzeDifferentialSweep(points: SweepPoint[], baseline: DifferentialBaseline): DifferentialSweepAnalysis {
+  const scores = scoreDifferentialSweep(points, baseline);
+  if (!scores.length || scores.some((score) => !score.valid)) return { valid: false, affectedPointCount: 0, affectedFraction: 0, maximumDistance: Number.NaN, medianDistance: Number.NaN, rmsDistance: Number.NaN, bands: [], baselineResonanceHz: Number.NaN, liveResonanceHz: Number.NaN, resonanceShiftHz: Number.NaN, classification: 'quiet' };
+  const distances = scores.map((score) => score.distance);
+  const affected = scores.map((score) => score.distance > baseline.threshold);
+  const bands: DifferentialBand[] = [];
+  for (let start = 0; start < affected.length;) {
+    if (!affected[start]) { start += 1; continue; }
+    let stop = start; let peak = start;
+    while (stop + 1 < affected.length && affected[stop + 1]) { stop += 1; if (scores[stop].distance > scores[peak].distance) peak = stop; }
+    bands.push({ startHz: points[start].frequency, stopHz: points[stop].frequency, peakHz: points[peak].frequency, peakDistance: scores[peak].distance, pointCount: stop - start + 1 }); start = stop + 1;
+  }
+  const affectedPointCount = affected.filter(Boolean).length;
+  const affectedFraction = affectedPointCount / points.length;
+  const baselineResonanceIndex = baseline.frequencies.reduce((best, value, index, values) => Math.hypot(value.meanRe, value.meanIm) < Math.hypot(values[best].meanRe, values[best].meanIm) ? index : best, 0);
+  const liveResonanceIndex = points.reduce((best, value, index, values) => Math.hypot(value.s11.re, value.s11.im) < Math.hypot(values[best].s11.re, values[best].s11.im) ? index : best, 0);
+  const classification = affectedPointCount === 0 ? 'quiet' : affectedFraction >= 0.5 ? 'broadband' : bands.length === 1 ? 'localized' : 'multi-region';
+  return { valid: true, affectedPointCount, affectedFraction, maximumDistance: Math.max(...distances), medianDistance: quantile(distances, 0.5), rmsDistance: Math.sqrt(distances.reduce((sum, value) => sum + value * value, 0) / distances.length), bands, baselineResonanceHz: baseline.frequencies[baselineResonanceIndex].frequency, liveResonanceHz: points[liveResonanceIndex].frequency, resonanceShiftHz: points[liveResonanceIndex].frequency - baseline.frequencies[baselineResonanceIndex].frequency, classification };
+}
+
+export function assessBaselineStability(sweeps: SweepPoint[][]): BaselineStability {
+  if (sweeps.length < 20 || !frequencyGridsMatch(sweeps)) return { ready: false, reason: sweeps.length < 20 ? 'Collecting the minimum 20 complete sweeps.' : 'Frequency grids do not match.', sweepCount: sweeps.length, drift95: Number.NaN, driftToThresholdRatio: Number.NaN, validationFalseAlarmFraction: Number.NaN };
+  const baseline = buildDifferentialBaseline(sweeps);
+  const half = Math.floor(sweeps.length / 2);
+  const early = sweeps.slice(0, half); const late = sweeps.slice(half);
+  const drift = baseline.frequencies.map((model, index) => {
+    const earlyRe = early.reduce((sum, sweep) => sum + sweep[index].s11.re, 0) / early.length; const earlyIm = early.reduce((sum, sweep) => sum + sweep[index].s11.im, 0) / early.length;
+    const lateRe = late.reduce((sum, sweep) => sum + sweep[index].s11.re, 0) / late.length; const lateIm = late.reduce((sum, sweep) => sum + sweep[index].s11.im, 0) / late.length;
+    const re = lateRe - earlyRe; const im = lateIm - earlyIm;
+    return Math.sqrt(Math.max(0, re * re * model.inverseReRe + 2 * re * im * model.inverseReIm + im * im * model.inverseImIm));
+  });
+  const drift95 = quantile(drift, 0.95); const driftToThresholdRatio = drift95 / baseline.threshold;
+  const ready = sweeps.length >= 25 && driftToThresholdRatio <= 0.5;
+  return { ready, reason: ready ? 'Baseline mean and measured noise have converged.' : sweeps.length < 25 ? 'Collecting enough sweeps to check convergence.' : 'Baseline drift remains large relative to its measured silence threshold.', sweepCount: sweeps.length, drift95, driftToThresholdRatio, validationFalseAlarmFraction: baseline.validationFalseAlarmFraction };
+}
+
+export function recommendDifferentialAudioMapping(analysis: DifferentialSweepAnalysis | null): AudioMappingRecommendation {
+  if (!analysis?.valid || analysis.classification === 'quiet') return { mode: 'fixed-channel', pitchMeaning: 'selected RF channel identity', loudnessMeaning: 'normalized residual above threshold', secondaryMeaning: 'none', reason: 'No stable changed-frequency feature is available yet.' };
+  if (analysis.classification === 'localized' && analysis.bands.length === 1) return { mode: 'resonance-pitch', pitchMeaning: 'frequency of the strongest affected region', loudnessMeaning: 'peak normalized residual', secondaryMeaning: 'timbre brightness represents affected bandwidth', reason: 'The measured response contains one localized affected region.' };
+  if (analysis.classification === 'multi-region') return { mode: 'feature-tones', pitchMeaning: 'one tone per affected frequency region', loudnessMeaning: 'each region peak normalized residual', secondaryMeaning: 'dissonance represents separation among affected regions', reason: 'Several distinct affected frequency regions are present.' };
+  return { mode: 'broadband-timbre', pitchMeaning: 'fixed event identity, not RF frequency', loudnessMeaning: 'whole-trace RMS normalized residual', secondaryMeaning: 'timbre brightness represents affected fraction', reason: 'A broadband response would be misleading if encoded as one resonance pitch.' };
 }
