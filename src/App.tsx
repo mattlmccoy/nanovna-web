@@ -752,6 +752,7 @@ export default function App() {
   const lastFollowUpdateRef = useRef<number | null>(null);
   const followIntervalsRef = useRef<number[]>([]);
   const [points, setPoints] = useState(() => demoSweep(1e6, 51e6, 1001));
+  const [differentialPoints, setDifferentialPoints] = useState<SweepPoint[]>([]);
   const pointsRef = useRef(points);
   const [reference, setReference] = useState<SweepPoint[] | null>(null);
   const [start, setStart] = useState('1M');
@@ -994,6 +995,7 @@ export default function App() {
       const version = await connection.connect();
       connectionRef.current = connection;
       setConnected(true);
+      setDifferentialPoints([]);
       setFirmware(version);
       setConnectionSession(crypto.randomUUID());
       setCalibrationState(connection.calibration);
@@ -1018,7 +1020,7 @@ export default function App() {
     finally { setBusy(false); }
   }
 
-  async function runSweep() {
+  async function runSweep(forceContinuous = false) {
     if (!connectionRef.current || !connected) { setMessage('Connect a NanoVNA before starting a live sweep.'); return; }
     setFollowDevice(false);
     setFollowStatus('Inactive while NanoVNA Web controls the sweep');
@@ -1044,6 +1046,7 @@ export default function App() {
           setMessage(`${averages > 1 ? 'Averaged' : 'Live'} sweep · segment ${update.completedSegments} of ${update.totalSegments} · ${update.points.length} samples displayed.`);
         }, () => stopRequestedRef.current);
         if (result.points.length) {
+          if (result.complete) setDifferentialPoints(result.points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })));
           setMessage(result.complete
             ? `Sweep complete · ${result.points.length} samples · browser smoothing OFF · device calibration: ${calibrationAtAcquisition}.`
             : `Partial sweep stopped · ${result.completedSegments} of ${result.totalSegments} segments · ${result.points.length} samples retained and labeled partial.`);
@@ -1051,7 +1054,7 @@ export default function App() {
         } else if (result.cancelled) {
           setMessage('Sweep stopped before the first segment completed. Existing measurement remains displayed.');
         }
-      } while (continuous && !stopRequestedRef.current);
+      } while ((forceContinuous || continuous) && !stopRequestedRef.current);
     } catch (error) {
       const detail = (error as Error).message;
       if (retainedPartial.length) {
@@ -1074,6 +1077,9 @@ export default function App() {
     }
     finally { setBusy(false); }
   }
+
+  function startDifferentialAcquisition() { setContinuous(true); void runSweep(true); }
+  function stopDifferentialAcquisition() { setContinuous(false); stopSweep(); }
 
   function stopSweep() {
     stopRequestedRef.current = true;
@@ -1238,7 +1244,7 @@ export default function App() {
             <label className="check-row"><input type="checkbox" checked={logarithmicSweep} onChange={(event) => setLogarithmicSweep(event.target.checked)} /> Logarithmic segment spacing</label>
             <details className="sweep-processing"><summary>Averaging</summary><div className="form-grid"><label>Measurements</label><DraftNumberInput min="1" max="99" step="1" value={averages} onCommit={(value) => { setAverages(value); setTruncateCount((current) => Math.min(current, value - 1)); }} /><label>Discard outliers</label><DraftNumberInput min="0" max={Math.max(0, averages - 1)} step="1" value={truncateCount} onCommit={setTruncateCount} /></div><small>Averaging is OFF at 1. Higher values alter the data and are labeled in plot exports.</small></details>
             <div className="progress"><i style={{ width: `${progress * 100}%` }} /></div>
-            <div className="sweep-buttons"><button onClick={runSweep} disabled={busy || !connected}>Sweep</button><button onClick={stopSweep} disabled={!busy}>Stop</button></div>
+            <div className="sweep-buttons"><button onClick={() => void runSweep()} disabled={busy || !connected}>Sweep</button><button onClick={stopSweep} disabled={!busy}>Stop</button></div>
           </fieldset>
           <fieldset><legend>Markers</legend>
             {markers.map((marker, index) => <div className="marker-control" key={marker.id}>
@@ -1309,7 +1315,7 @@ export default function App() {
         <section className="charts-grid">
           {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} exportContext={sourceInfo} displaySettings={displaySettings} onMarkerChange={updateMarker} onActiveMarkerChange={setActiveMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
         </section>
-      </div> : <DifferentialProbeWorkspace points={points} markerIndex={markers[activeMarker]?.index ?? 0} context={{ device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel, bandwidthHz: deviceBandwidth }} dataFresh={connected && !busy && sourceInfo.sourceKind === 'device' && !followStatus.startsWith('Stale')} sourceName={sourceInfo.sourceName} connected={connected} busy={busy} onToggleConnection={toggleConnection} />}
+      </div> : <DifferentialProbeWorkspace points={differentialPoints} markerIndex={markers[activeMarker]?.index ?? 0} context={{ device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel, bandwidthHz: deviceBandwidth }} dataFresh={connected && differentialPoints.length > 0} sourceName={sourceInfo.sourceName} connected={connected} busy={busy} onToggleConnection={toggleConnection} onStartSweeping={startDifferentialAcquisition} onStopSweeping={stopDifferentialAcquisition} />}
       <div className="statusbar"><span>{message}</span><span className="status-actions"><a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a><button onClick={() => setAboutOpen(true)}>About</button></span></div>
       {helpOpen && <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}>
         <section className="about-dialog help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onMouseDown={(event) => event.stopPropagation()}>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { analyzeDifferentialSweep, assessBaselineStability, buildDifferentialBaseline, recommendDifferentialAudioMapping, scoreDifferentialPoint, type BaselineStability, type DifferentialBaseline, type DifferentialScore, type DifferentialSweepAnalysis } from '../lib/differentialProbe';
+import { buildGuidedProtocol, type GuidedProtocolStep } from '../lib/guidedProtocol';
 import type { SweepPoint } from '../lib/rf';
 
 export interface DifferentialProbeContext { device: string; session: string; calibration: string; processing: string; bandwidthHz: number | null; }
@@ -8,15 +9,17 @@ interface PreparedMedia { stream: MediaStream; microphone: MediaStreamAudioSourc
 interface ActiveMediaRecording { recorder: MediaRecorder; chunks: Blob[]; mimeType: string; startedAt: number; }
 interface RecordedFrame { timestamp: string; elapsedMs: number; markerIndex: number; score: DifferentialScore; analysis: DifferentialSweepAnalysis; s11Re: number; s11Im: number; event: boolean; tag: string; trace: SweepPoint[]; }
 interface DetectedEvent { id: number; startTimestamp: string; startElapsedMs: number; endTimestamp: string | null; endElapsedMs: number | null; tag: string; classification: DifferentialSweepAnalysis['classification']; peakDistance: number; maximumAffectedFraction: number; resonanceShiftHz: number; bands: DifferentialSweepAnalysis['bands']; }
-const MAX_RECORDED_SAMPLES = 100_000;
+interface ProtocolCue { timestamp: string; elapsedMs: number | null; stepIndex: number; component: string; repetition: number; action: string; tag: string; }
+const MAX_RECORDED_SAMPLES = 500_000;
 const MAX_MEDIA_DURATION_MS = 10 * 60 * 1000;
+const COMPONENT_OPTIONS = ['Series capacitor bank', 'Shunt capacitor bank', 'Transformer', 'Electrode plates', 'Wiring / interconnects', 'Inductor / inductor bank', 'Connectors', 'Enclosure / shield seam'];
 
 function copySweep(points: SweepPoint[]) { return points.map((point) => ({ ...point, s11: { ...point.s11 }, s21: { ...point.s21 } })); }
 function formatFrequency(value: number) { return value >= 1e6 ? `${(value / 1e6).toFixed(6)} MHz` : value >= 1e3 ? `${(value / 1e3).toFixed(3)} kHz` : `${value.toFixed(0)} Hz`; }
 function download(text: string, type: string, filename: string) { const url = URL.createObjectURL(new Blob([text], { type })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function touchstone(points: SweepPoint[], header: string) { return [`! ${header}`, '# Hz S RI R 50', ...points.map((point) => `${point.frequency} ${point.s11.re} ${point.s11.im}`)].join('\n'); }
 
-export function DifferentialProbeWorkspace({ points, markerIndex, context, dataFresh, sourceName, connected, busy, onToggleConnection }: { points: SweepPoint[]; markerIndex: number; context: DifferentialProbeContext; dataFresh: boolean; sourceName: string; connected: boolean; busy: boolean; onToggleConnection: () => Promise<void>; }) {
+export function DifferentialProbeWorkspace({ points, markerIndex, context, dataFresh, sourceName, connected, busy, onToggleConnection, onStartSweeping, onStopSweeping }: { points: SweepPoint[]; markerIndex: number; context: DifferentialProbeContext; dataFresh: boolean; sourceName: string; connected: boolean; busy: boolean; onToggleConnection: () => Promise<void>; onStartSweeping: () => void; onStopSweeping: () => void; }) {
   const [captureTarget, setCaptureTarget] = useState(50);
   const [diagnosticIndex, setDiagnosticIndex] = useState(markerIndex);
   const [captures, setCaptures] = useState<SweepPoint[][]>([]);
@@ -38,6 +41,7 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
   const [automaticPhase, setAutomaticPhase] = useState('Idle');
   const [includeMedia, setIncludeMedia] = useState(true);
   const [mediaRecording, setMediaRecording] = useState(false);
+  const [, setMediaReady] = useState(false);
   const [mediaError, setMediaError] = useState('');
   const [mediaDownload, setMediaDownload] = useState<{ url: string; filename: string } | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -48,11 +52,21 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
   const [probeStandoff, setProbeStandoff] = useState('');
   const [experimentNotes, setExperimentNotes] = useState('');
   const [detectedEvents, setDetectedEvents] = useState<DetectedEvent[]>([]);
+  const [selectedComponents, setSelectedComponents] = useState<string[]>([]);
+  const [otherComponent, setOtherComponent] = useState('');
+  const [guideRepetitions, setGuideRepetitions] = useState(1);
+  const [guidedPlan, setGuidedPlan] = useState<GuidedProtocolStep[]>([]);
+  const [guideStepIndex, setGuideStepIndex] = useState(-1);
+  const [guideStep, setGuideStep] = useState<GuidedProtocolStep | null>(null);
+  const [guideSeconds, setGuideSeconds] = useState(0);
   const audioRef = useRef<AudioNodes | null>(null);
   const preparedMediaRef = useRef<PreparedMedia | null>(null);
   const mediaRecordingRef = useRef<ActiveMediaRecording | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const automaticStartedRef = useRef(false);
+  const acquisitionStartedRef = useRef(false);
+  const previousSessionRef = useRef(context.session);
+  const protocolCuesRef = useRef<ProtocolCue[]>([]);
   const timersRef = useRef<number[]>([]);
   const recordedFramesRef = useRef<RecordedFrame[]>([]);
   const recordedSampleCountRef = useRef(0);
@@ -129,7 +143,17 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
   useEffect(() => () => { clearTimers(); stopMediaCapture(); stopAudio(); }, []);
 
   useEffect(() => {
-    stopAutomaticRun();
+    if (previousSessionRef.current === context.session) return;
+    previousSessionRef.current = context.session;
+    if (!automatic) {
+      stopAutomaticRun();
+      protocolCuesRef.current = [];
+      setGuidedPlan([]); setGuideStep(null); setGuideStepIndex(-1); setGuideSeconds(0);
+    } else {
+      acquisitionStartedRef.current = false;
+      automaticStartedRef.current = false;
+      setAutomaticPhase('VNA connected · starting acquisition');
+    }
     setCapturing(false);
     setCaptures([]);
     setBaseline(null);
@@ -148,6 +172,7 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
   useEffect(() => {
     if (!automatic) return;
     if (!connected) { setAutomaticPhase('Choose the VNA in the USB prompt'); return; }
+    if (!acquisitionStartedRef.current) { acquisitionStartedRef.current = true; setAutomaticPhase('Starting continuous VNA sweeps'); onStartSweeping(); return; }
     if (!dataFresh) { setAutomaticPhase('Waiting for a fresh VNA sweep'); return; }
     if (!baseline && !capturing) { setAutomaticPhase('Capturing the measured baseline'); beginBaseline(true); return; }
     if (capturing) { setAutomaticPhase(`Baseline ${captures.length} / ${captureTarget}`); return; }
@@ -157,10 +182,10 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
       startTraceRecording();
       void (async () => {
         if (includeMedia && preparedMediaRef.current) await startMediaRecording();
-        runSyncSequence();
+        runSyncSequence(true);
       })();
     }
-  }, [automatic, baseline, captureTarget, captures.length, capturing, connected, dataFresh, includeMedia]);
+  }, [automatic, baseline, captureTarget, captures.length, capturing, connected, dataFresh, includeMedia, onStartSweeping]);
 
   function clearTimers() { timersRef.current.forEach((timer) => window.clearTimeout(timer)); timersRef.current = []; }
   function beginBaseline(preserveAudio = false) { if (!preserveAudio) stopAudio(); setBaseline(null); setCaptures([]); setBaselineError(''); setBaselineStability(null); setBaselineWarning(''); broadChangeRef.current = 0; latestCaptureRef.current = null; setCapturing(true); }
@@ -181,6 +206,7 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
     const microphone = nodes.context.createMediaStreamSource(stream); microphone.connect(nodes.recordingDestination);
     preparedMediaRef.current = { stream, microphone };
+    setMediaReady(true);
     if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play().catch(() => undefined); }
   }
   function preferredMediaType() { return ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'].find((type) => MediaRecorder.isTypeSupported(type)) ?? ''; }
@@ -195,21 +221,40 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
     const timer = window.setTimeout(() => { stopMediaRecording(); setRecording(false); setRecordingNote('Recording stopped at the 10-minute browser memory safety limit.'); setAutomatic(false); setAutomaticPhase('Stopped at 10-minute limit'); }, MAX_MEDIA_DURATION_MS); timersRef.current.push(timer);
   }
   function stopMediaRecording() { const active = mediaRecordingRef.current; if (!active) return; if (active.recorder.state !== 'inactive') active.recorder.stop(); mediaRecordingRef.current = null; }
-  function stopMediaCapture() { stopMediaRecording(); const prepared = preparedMediaRef.current; if (!prepared) return; try { prepared.microphone.disconnect(); } catch { /* already disconnected */ } prepared.stream.getTracks().forEach((track) => track.stop()); if (videoRef.current) videoRef.current.srcObject = null; preparedMediaRef.current = null; }
+  function stopMediaCapture() { stopMediaRecording(); const prepared = preparedMediaRef.current; if (!prepared) { setMediaReady(false); return; } try { prepared.microphone.disconnect(); } catch { /* already disconnected */ } prepared.stream.getTracks().forEach((track) => track.stop()); if (videoRef.current) videoRef.current.srcObject = null; preparedMediaRef.current = null; setMediaReady(false); }
   function startTraceRecording() { recordedFramesRef.current = []; recordedSampleCountRef.current = 0; setRecordedFrameCount(0); setRecordingNote(''); setDetectedEvents([]); activeEventRef.current = null; setRecordingStart(performance.now()); setRecording(true); }
+  function configuredComponents() { return [...selectedComponents, ...(otherComponent.trim() ? [otherComponent.trim()] : [])]; }
+  function toggleComponent(component: string) { setSelectedComponents((current) => current.includes(component) ? current.filter((item) => item !== component) : [...current, component]); }
   async function startAutomaticRun() {
     if (automatic) return;
+    const plan = buildGuidedProtocol(configuredComponents(), guideRepetitions);
+    if (!plan.length) { setMediaError('Select at least one network component before starting the guided run.'); return; }
+    if (plan.reduce((sum, step) => sum + step.durationSeconds, 0) > 480) { setMediaError('This guided plan exceeds eight minutes. Reduce the repetitions or split the components across two runs so recording can finalize safely.'); return; }
+    setGuidedPlan(plan); setGuideStep(null); setGuideStepIndex(-1); setGuideSeconds(0); protocolCuesRef.current = [];
     setMediaError(''); setAutomaticPhase('Preparing'); automaticStartedRef.current = false; await armAudio();
     try { if (includeMedia) await prepareMedia(); } catch (error) { setMediaError(`${(error as Error).message} The VNA trace run will continue without media.`); }
     setAutomatic(true);
     if (!connected) { setAutomaticPhase('Choose the VNA in the USB prompt'); try { await onToggleConnection(); } catch (error) { setMediaError((error as Error).message); setAutomatic(false); setAutomaticPhase('Connection cancelled'); } }
   }
-  function stopAutomaticRun() { clearTimers(); setAutomatic(false); automaticStartedRef.current = false; setCapturing(false); setRecording(false); stopMediaCapture(); stopAudio(); setCountdown(null); setSyncFlash(false); setAutomaticPhase('Stopped'); }
-  function runSyncSequence() {
+  function stopAutomaticRun() { clearTimers(); setAutomatic(false); automaticStartedRef.current = false; acquisitionStartedRef.current = false; setCapturing(false); setRecording(false); setGuideStep(null); setGuideStepIndex(-1); setGuideSeconds(0); onStopSweeping(); stopMediaCapture(); stopAudio(); setCountdown(null); setSyncFlash(false); setAutomaticPhase('Stopped'); }
+  function runSyncSequence(startGuideInput: unknown = false) {
+    const startGuide = startGuideInput === true;
     setAutomaticPhase('Sync countdown: keep the setup still, then clap');
     [3, 2, 1].forEach((value, index) => { const timer = window.setTimeout(() => setCountdown(value), index * 1000); timersRef.current.push(timer); });
-    const cue = window.setTimeout(() => { setCountdown(null); setSyncFlash(true); addSyncMarker(); setAutomaticPhase('Recording · move the probe and add tags as needed'); const off = window.setTimeout(() => setSyncFlash(false), 300); timersRef.current.push(off); }, 3000); timersRef.current.push(cue);
+    const cue = window.setTimeout(() => { setCountdown(null); setSyncFlash(true); addSyncMarker(); setAutomaticPhase(startGuide ? 'Sync complete · guided test begins next' : 'Recording · manual probing'); const off = window.setTimeout(() => { setSyncFlash(false); if (startGuide) beginGuidedStep(0); }, 700); timersRef.current.push(off); }, 3000); timersRef.current.push(cue);
   }
+  function beginGuidedStep(index: number) {
+    const step = guidedPlan[index];
+    if (!step) { finishGuidedRun(); return; }
+    setGuideStepIndex(index); setGuideStep(step); setGuideSeconds(step.durationSeconds); setTag(step.tag); setAutomaticPhase(`${index + 1} / ${guidedPlan.length} · ${step.title}`);
+    protocolCuesRef.current.push({ timestamp: new Date().toISOString(), elapsedMs: recording ? performance.now() - recordingStart : null, stepIndex: index, component: step.component, repetition: step.repetition, action: step.action, tag: step.tag });
+    let remaining = step.durationSeconds;
+    const tick = () => { remaining -= 1; setGuideSeconds(Math.max(0, remaining)); if (remaining <= 0) beginGuidedStep(index + 1); else { const timer = window.setTimeout(tick, 1000); timersRef.current.push(timer); } };
+    const timer = window.setTimeout(tick, 1000); timersRef.current.push(timer);
+  }
+  function finishGuidedRun() { clearTimers(); setGuideStep(null); setGuideSeconds(0); setRecording(false); stopMediaCapture(); stopAudio(); onStopSweeping(); acquisitionStartedRef.current = false; automaticStartedRef.current = false; setAutomatic(false); setAutomaticPhase('Guided run complete · download the media and paper-ready bundle'); }
+  async function enableManualMedia() { setMediaError(''); setIncludeMedia(true); try { await prepareMedia(); } catch (error) { setMediaError((error as Error).message); } }
+  async function startManualMedia() { setMediaError(''); setIncludeMedia(true); try { await prepareMedia(); if (baseline && !recording) startTraceRecording(); await startMediaRecording(); } catch (error) { setMediaError((error as Error).message); } }
   function addSyncMarker() {
     if (recording && score?.valid && sweepAnalysis?.valid && point && recordedSampleCountRef.current + points.length <= MAX_RECORDED_SAMPLES) { recordedFramesRef.current.push({ timestamp: new Date().toISOString(), elapsedMs: performance.now() - recordingStart, markerIndex: safeIndex, score, analysis: sweepAnalysis, s11Re: point.s11.re, s11Im: point.s11.im, event: eventActive, tag: 'SYNC_MARKER', trace: copySweep(points) }); recordedSampleCountRef.current += points.length; setRecordedFrameCount(recordedFramesRef.current.length); }
     const nodes = audioRef.current; if (!nodes) return; const now = nodes.context.currentTime; const normalized = score?.valid ? Math.min(1, score.excess / Math.max(score.threshold * 2, 1e-9)) : 0; nodes.oscillator.frequency.cancelScheduledValues(now); nodes.gain.gain.cancelScheduledValues(now); nodes.oscillator.frequency.setValueAtTime(880, now); nodes.gain.gain.setValueAtTime(.025, now); nodes.gain.gain.exponentialRampToValueAtTime(.0001, now + .12); nodes.oscillator.frequency.setValueAtTime(toneFrequency, now + .13); nodes.gain.gain.setTargetAtTime(dataFresh && eventActive ? normalized * maximumGain : 0, now + .13, .025);
@@ -221,9 +266,9 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
     const completedEvents = activeEventRef.current ? [...detectedEvents, { ...activeEventRef.current, endTimestamp: null, endElapsedMs: null }] : detectedEvents;
     const intervals = recordedFrames.slice(1).map((frame, index) => frame.elapsedMs - recordedFrames[index].elapsedMs).filter((value) => value > 0); const sortedIntervals = intervals.slice().sort((a, b) => a - b); const medianIntervalMs = sortedIntervals.length ? sortedIntervals[Math.floor(sortedIntervals.length / 2)] : null;
     const acquisitionQuality = { frameCount: recordedFrames.length, frequencySamples: recordedSampleCountRef.current, medianIntervalMs, maximumIntervalMs: intervals.length ? Math.max(...intervals) : null, suspectedDroppedTraceGaps: medianIntervalMs ? intervals.filter((value) => value > medianIntervalMs * 2.5).length : 0, baselineValidityWarning: baselineWarning || null };
-    const metadata = { specimenId, operator: operatorName, probeType, probeStandoff, notes: experimentNotes };
+    const metadata = { specimenId, operator: operatorName, probeType, probeStandoff, networkComponents: configuredComponents(), guidedRepetitions: guideRepetitions, notes: experimentNotes };
     const baselineSweeps = captures.map((sweep) => copySweep(sweep));
-    const session = { schemaVersion: 2, mode: 'Differential Probe', createdAt: new Date().toISOString(), sourceName, context, metadata, selectedFrequencyHz: point?.frequency ?? null, toneMapping: { pitchHz: toneFrequency, pitchMeaning: 'fixed identity of the selected RF channel', loudness: 'normalized Mahalanobis-distance excess above empirical baseline threshold', maximumGain, onsetFrames: 2, releaseFrames: 3 }, recommendedMapping: mappingRecommendation, baseline, baselineStability, baselineSweeps, acquisitionQuality, events: completedEvents, frames: recordedFrames };
+    const session = { schemaVersion: 3, mode: 'Differential Probe', createdAt: new Date().toISOString(), sourceName, context, metadata, guidedProtocol: { plan: guidedPlan, cues: protocolCuesRef.current }, selectedFrequencyHz: point?.frequency ?? null, toneMapping: { pitchHz: toneFrequency, pitchMeaning: 'fixed identity of the selected RF channel', loudness: 'normalized Mahalanobis-distance excess above empirical baseline threshold', maximumGain, onsetFrames: 2, releaseFrames: 3 }, recommendedMapping: mappingRecommendation, baseline, baselineStability, baselineSweeps, acquisitionQuality, events: completedEvents, frames: recordedFrames };
     download(JSON.stringify(session, null, 2), 'application/json', `nanovna-differential-probe-${stamp}.json`);
     const header = 'timestamp,elapsed_ms,tag,frequency_hz,s11_real,s11_imag,delta_gamma_real,delta_gamma_imag,normalized_distance,threshold,event,classification,affected_fraction,resonance_shift_hz';
     const csv = [header, ...recordedFrames.map((frame) => [frame.timestamp, frame.elapsedMs, JSON.stringify(frame.tag), frame.score.frequency, frame.s11Re, frame.s11Im, frame.score.deltaGammaRe, frame.score.deltaGammaIm, frame.score.distance, frame.score.threshold, frame.event, frame.analysis.classification, frame.analysis.affectedFraction, frame.analysis.resonanceShiftHz].join(','))].join('\n');
@@ -238,8 +283,10 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
   const baselineState = capturing ? `Capturing ${captures.length} · maximum ${captureTarget}` : baseline ? `${baseline.sweepCount} sweeps · threshold ${baseline.threshold.toFixed(2)} σ-equivalent` : 'Not calibrated';
   return <section className="differential-workspace">
     {(countdown !== null || syncFlash) && <div className={`sync-overlay ${syncFlash ? 'flash' : ''}`}><b>{syncFlash ? 'CLAP' : countdown}</b><span>{syncFlash ? 'Sync event recorded' : 'Keep still'}</span></div>}
+    {guideStep && <div className={`guided-cue ${guideStep.action}`}><span>{guideStepIndex + 1} / {guidedPlan.length} · {guideStep.component} · repetition {guideStep.repetition}</span><b>{guideStep.title}</b><p>{guideStep.instruction}</p><strong>{guideSeconds}s</strong></div>}
     <header className="differential-intro"><div><h1>Differential Probe</h1><p>Sonified complex-S11 perturbation relative to a measured baseline. This is a spatial-sensitivity diagnostic, not a calibrated RF-leakage measurement.</p></div><div className="differential-header-actions"><button onClick={() => void onToggleConnection()} disabled={busy}>{busy ? 'Working…' : connected ? 'Disconnect VNA' : 'Connect to VNA'}</button><div className={`differential-event ${eventActive ? 'active' : ''}`}><span>Detector</span><b>{!connected ? 'DISCONNECTED' : !baseline ? 'Uncalibrated' : !dataFresh ? 'Stale' : eventActive ? 'CHANGE' : 'QUIET'}</b></div></div></header>
-    <fieldset className="automatic-capture"><legend>Automatic capture</legend><div><p>One run connects the VNA, waits for fresh data, measures the baseline, starts trace and camera/microphone recording, then gives a 3–2–1 clap cue. The generated event tone and room microphone are mixed into the recorded video.</p><label><input type="checkbox" checked={includeMedia} onChange={(event) => setIncludeMedia(event.target.checked)} disabled={automatic} /> Record camera + microphone</label></div><div className="automatic-actions"><button onClick={() => void startAutomaticRun()} disabled={automatic || busy}>Start automatic run</button><button onClick={stopAutomaticRun} disabled={!automatic && !mediaRecording && !recording}>Stop and finalize</button><b>{automaticPhase}</b></div>{includeMedia && <video ref={videoRef} className="media-preview" muted playsInline />}{mediaDownload && <a className="media-download" href={mediaDownload.url} download={mediaDownload.filename}>Download synchronized video + audio</a>}{mediaError && <small className="stale-status">{mediaError}</small>}</fieldset>
+    <fieldset className="network-setup"><legend>Before starting · describe the network</legend><p>Select every component or region the guided test should approach. The runner creates labeled prepare, approach, hold, withdraw, and recovery intervals for each selection.</p><div className="component-picker">{COMPONENT_OPTIONS.map((component) => <label key={component}><input type="checkbox" checked={selectedComponents.includes(component)} onChange={() => toggleComponent(component)} disabled={automatic} /> {component}</label>)}</div><div className="network-custom"><label>Other component / region<input value={otherComponent} onChange={(event) => setOtherComponent(event.target.value)} disabled={automatic} placeholder="e.g. matching inductor L2" /></label><label>Repetitions<select value={guideRepetitions} onChange={(event) => setGuideRepetitions(Number(event.target.value))} disabled={automatic}>{[1,2,3,4,5].map((value) => <option key={value}>{value}</option>)}</select></label></div><small>{configuredComponents().length ? `${configuredComponents().length} component${configuredComponents().length === 1 ? '' : 's'} selected · ${buildGuidedProtocol(configuredComponents(), guideRepetitions).length} timed steps` : 'Select at least one component to enable the guided automatic run.'}</small></fieldset>
+    <fieldset className="automatic-capture"><legend>Automatic guided capture</legend><div><p>Connects the VNA, starts complete repeated sweeps, measures the baseline, enables synchronized media, gives the clap cue, then guides every selected approach and recovery action. At the end it stops and finalizes the recording.</p><label><input type="checkbox" checked={includeMedia} onChange={(event) => setIncludeMedia(event.target.checked)} disabled={automatic} /> Record camera + microphone</label><div className="manual-media-actions"><button onClick={() => void enableManualMedia()} disabled={automatic || Boolean(preparedMediaRef.current)}>Enable camera + microphone</button><button onClick={() => void startManualMedia()} disabled={automatic || mediaRecording}>Start manual media recording</button><button onClick={stopMediaRecording} disabled={!mediaRecording}>Finalize media</button></div></div><div className="automatic-actions"><button onClick={() => void startAutomaticRun()} disabled={automatic || busy || !configuredComponents().length}>Start guided run</button><button onClick={stopAutomaticRun} disabled={!automatic && !mediaRecording && !recording}>Stop and finalize</button><button onClick={onStartSweeping} disabled={!connected || busy}>Start VNA stream</button><b>{automaticPhase}</b></div>{includeMedia && <video ref={videoRef} className="media-preview" muted playsInline />}{mediaDownload && <a className="media-download" href={mediaDownload.url} download={mediaDownload.filename}>Download synchronized video + audio</a>}{mediaError && <small className="stale-status">{mediaError}</small>}</fieldset>
     <div className="mapping-recommendation"><span>Suggested mapping</span><b>{mappingRecommendation.mode}</b><span>{mappingRecommendation.reason}</span><small>Pitch: {mappingRecommendation.pitchMeaning} · Loudness: {mappingRecommendation.loudnessMeaning} · Secondary: {mappingRecommendation.secondaryMeaning}</small></div>
     <div className="differential-grid">
       <fieldset><legend>1 · Baseline</legend><label>Maximum sweeps<select value={captureTarget} onChange={(event) => setCaptureTarget(Number(event.target.value))} disabled={capturing}>{[30,50,75,100].map((value) => <option key={value}>{value}</option>)}</select></label><button className="wide" onClick={() => beginBaseline()} disabled={!dataFresh || capturing}>{capturing ? 'Keep the setup still…' : 'Capture measured baseline'}</button><div className="instrument-status"><span>Status</span><b>{baselineState}</b><span>Convergence</span><b>{baselineStability ? `${baselineStability.ready ? 'Ready' : 'Waiting'} · drift/threshold ${Number.isFinite(baselineStability.driftToThresholdRatio) ? baselineStability.driftToThresholdRatio.toFixed(3) : '—'}` : '—'}</b><span>Validation false alarms</span><b>{baseline ? `${(baseline.validationFalseAlarmFraction * 100).toFixed(3)}% of held-out frequency samples` : '—'}</b></div>{baselineStability && <small>{baselineStability.reason}</small>}{baselineError && <small className="stale-status">{baselineError}</small>}<small>Capture stops early after at least 25 sweeps when the baseline mean converges relative to its measured silence threshold. Otherwise it continues to the selected maximum.</small></fieldset>

@@ -106,10 +106,18 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .differential-intro p { max-width: 720px; margin: 0; color: #555; line-height: 1.45; }
 .differential-header-actions { display: grid; min-width: 170px; gap: 7px; }
 .differential-header-actions > button { width: 100%; }
+.network-setup { max-width: 1180px; box-sizing: border-box; margin: 0 auto 10px; }
+.network-setup > p { margin: 0 0 9px; }
+.component-picker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px 12px; }
+.component-picker label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.network-custom { display: grid; grid-template-columns: minmax(240px, 1fr) 180px; gap: 10px; margin-top: 9px; }
+.network-custom label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px; }
 .automatic-capture { position: relative; display: grid; max-width: 1180px; margin: 0 auto 10px; grid-template-columns: minmax(0, 1fr) 240px 220px; align-items: center; gap: 14px; }
 .automatic-capture p { margin: 0 0 8px; line-height: 1.45; }
 .automatic-capture label { display: flex; align-items: center; gap: 6px; }
 .automatic-actions { display: grid; gap: 6px; }
+.manual-media-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.manual-media-actions button { flex: 1 1 150px; }
 .automatic-actions b { min-height: 24px; padding: 6px 8px; border-left: 4px solid var(--yellow); background: rgba(127,127,120,.08); font: 600 9px 'SFMono-Regular', Consolas, monospace; }
 .media-preview { width: 100%; max-height: 124px; border: 1px solid var(--edge); border-radius: 3px; background: #111; object-fit: cover; }
 .media-download { padding: 7px 9px; border: 1px solid var(--edge); border-radius: 3px; color: inherit; text-align: center; text-decoration: none; }
@@ -122,6 +130,15 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .sync-overlay b { font: 800 min(28vw, 220px)/.9 'SFMono-Regular', Consolas, monospace; }
 .sync-overlay span { margin-top: 18px; font-size: 18px; letter-spacing: .08em; text-transform: uppercase; }
 .sync-overlay.flash { background: #f0d20a; color: #111; }
+.guided-cue { position: fixed; z-index: 90; top: 14px; left: 50%; width: min(680px, calc(100vw - 28px)); box-sizing: border-box; transform: translateX(-50%); padding: 15px 78px 15px 17px; border: 1px solid #555; border-left: 8px solid var(--yellow); border-radius: 4px; background: rgba(24,25,27,.96); color: #f2f2ed; box-shadow: 0 12px 35px rgba(0,0,0,.45); pointer-events: none; }
+.guided-cue > span { display: block; color: #bdbeb9; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+.guided-cue > b { display: block; margin-top: 5px; font-size: 22px; }
+.guided-cue > p { margin: 5px 0 0; color: #deded9; line-height: 1.4; }
+.guided-cue > strong { position: absolute; top: 50%; right: 17px; transform: translateY(-50%); font: 800 24px 'SFMono-Regular', Consolas, monospace; }
+.guided-cue.approach { border-left-color: #43a9dd; }
+.guided-cue.hold { border-left-color: #f1d51c; }
+.guided-cue.withdraw { border-left-color: #e97845; }
+.guided-cue.rest { border-left-color: #58b66d; }
 .differential-grid { display: grid; max-width: 1180px; margin: 0 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .differential-grid fieldset { align-self: start; }
 .differential-grid fieldset > label { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(90px, 1fr) auto; align-items: center; gap: 7px; margin: 7px 0; }
@@ -391,6 +408,8 @@ html[data-theme='dark'] .comparison-chart-wrap { border-color: #414347; backgrou
 
 @media (max-width: 860px) {
   .automatic-capture { grid-template-columns: 1fr; }
+  .component-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .network-custom { grid-template-columns: 1fr; }
   .automatic-capture .media-download, .automatic-capture .stale-status { grid-column: auto; }
   .main-grid { display: flex; flex-direction: column; }
   .controls-column, .readouts-column { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
