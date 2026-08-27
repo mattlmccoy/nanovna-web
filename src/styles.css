@@ -122,6 +122,12 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .media-preview { width: 100%; max-height: 124px; border: 1px solid var(--edge); border-radius: 3px; background: #111; object-fit: cover; }
 .media-download { padding: 7px 9px; border: 1px solid var(--edge); border-radius: 3px; color: inherit; text-align: center; text-decoration: none; }
 .automatic-capture .media-download, .automatic-capture .stale-status { grid-column: 1 / -1; }
+.download-ready-panel { display: grid; max-width: 1180px; box-sizing: border-box; margin: 0 auto 10px; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px 18px; padding: 13px 15px; border: 2px solid #9d8800; border-left: 8px solid var(--yellow); background: #fff7bd; }
+.download-ready-panel b, .download-ready-panel span { display: block; }
+.download-ready-panel b { font-size: 15px; }
+.download-ready-panel span { margin-top: 3px; color: #555; }
+.download-ready-panel button { min-width: 260px; padding: 10px 16px; border-color: #8e7900; background: var(--yellow); color: #171717; font-weight: 800; }
+.bundle-download.ready { border: 2px solid #8e7900; background: var(--yellow); color: #171717; font-weight: 800; }
 .mapping-recommendation { display: grid; max-width: 1180px; box-sizing: border-box; margin: 0 auto 10px; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 6px 12px; padding: 9px 11px; border: 1px solid var(--edge); border-left: 4px solid var(--cyan); background: var(--surface); }
 .mapping-recommendation > span:first-child { color: var(--muted); font-size: 9px; text-transform: uppercase; }
 .mapping-recommendation > b { font-family: 'SFMono-Regular', Consolas, monospace; }
@@ -373,6 +379,8 @@ html[data-theme='dark'] .mapping-recommendation,
 html[data-theme='dark'] .instrument-status,
 html[data-theme='dark'] .recording-downloads a,
 html[data-theme='dark'] .media-download { color: #deded9; border-color: #4b4d51; background: #2b2c2f; }
+html[data-theme='dark'] .download-ready-panel { border-color: #cfb700; background: #343016; color: #f2f2ed; }
+html[data-theme='dark'] .download-ready-panel span { color: #d0cda9; }
 html[data-theme='dark'] .comparison-workspace { border-color: #4b4d51; background: #202124; box-shadow: 0 16px 55px rgba(0,0,0,.62); }
 html[data-theme='dark'] .comparison-header { border-color: #44464a; background: #2c2d30; }
 html[data-theme='dark'] .comparison-header span { color: #aaa; }
