@@ -1,7 +1,7 @@
-:root { font-family: 'Avenir Next', 'Helvetica Neue', Arial, sans-serif; color: #252525; background: #cfcfcd; font-synthesis: none; --surface: #e9e9e7; --surface-high: #f5f5f3; --edge: #b9b9b6; --yellow: #f1d51c; }
+:root { font-family: 'Avenir Next', 'Helvetica Neue', Arial, sans-serif; color: #252525; background: #cfcfcd; font-synthesis: none; --surface: #e9e9e7; --surface-high: #f5f5f3; --edge: #b9b9b6; --muted: #666660; --cyan: #168ba0; --yellow: #f1d51c; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: #cfcfcd; font-size: 12px; }
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 button, input, select { min-height: 27px; border: 1px solid #a9a9a6; border-radius: 4px; background: linear-gradient(#fbfbfa, #dededb); box-shadow: inset 0 1px rgba(255,255,255,.95), 0 1px 2px rgba(0,0,0,.12); }
 button { padding: 3px 10px; cursor: pointer; font-weight: 600; }
 button:active:not(:disabled) { transform: translateY(1px); box-shadow: inset 0 1px 3px rgba(0,0,0,.18); }
@@ -258,6 +258,7 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .pointwise-validation .unaligned { border-left: 3px solid #e2aa00; }
 
 html[data-theme='dark'] { color-scheme: dark; }
+html[data-theme='dark'] { --surface: #2b2c2f; --surface-high: #35363a; --edge: #44464a; --muted: #aeb0b2; --cyan: #55bfd2; }
 html[data-theme='dark'] body { color: #deded9; background: #1d1e20; }
 html[data-theme='dark'] .application { background: linear-gradient(135deg, #292a2d, #1d1e20); }
 html[data-theme='dark'] .window-title { color: #e7e7e2; border-color: #0d0e0f; background: linear-gradient(#393a3d, #26272a); box-shadow: inset 0 1px rgba(255,255,255,.08), 0 2px 6px rgba(0,0,0,.45); }
@@ -336,7 +337,8 @@ html[data-theme='dark'] .file-picker { color: #e6e6e1; border-color: #525458; ba
 html[data-theme='dark'] button:hover:not(:disabled),
 html[data-theme='dark'] .file-picker:hover { border-color: #74767a; background: #44464a; }
 html[data-theme='dark'] input,
-html[data-theme='dark'] select { color: #efefeb; border-color: #4b4d51; background: #202124; box-shadow: none; }
+html[data-theme='dark'] select,
+html[data-theme='dark'] textarea { color: #efefeb; border-color: #4b4d51; background: #202124; box-shadow: none; }
 html[data-theme='dark'] .progress { border-color: #4a4c50; background: #18191b; }
 html[data-theme='dark'] .serial-status { border-color: #484a4e; background: #222326; }
 html[data-theme='dark'] .chart-panel { border-color: #414347; background: #17181a; box-shadow: none; }
@@ -350,6 +352,10 @@ html[data-theme='dark'] .about-titlebar { border-color: #4b4d51; background: #35
 html[data-theme='dark'] .differential-intro p { color: #b6b7b3; }
 html[data-theme='dark'] .differential-event { border-color: #44464a; background: #2b2c2f; }
 html[data-theme='dark'] .differential-event.active { border-left-color: #ff665c; background: #3b2424; }
+html[data-theme='dark'] .mapping-recommendation,
+html[data-theme='dark'] .instrument-status,
+html[data-theme='dark'] .recording-downloads a,
+html[data-theme='dark'] .media-download { color: #deded9; border-color: #4b4d51; background: #2b2c2f; }
 html[data-theme='dark'] .comparison-workspace { border-color: #4b4d51; background: #202124; box-shadow: 0 16px 55px rgba(0,0,0,.62); }
 html[data-theme='dark'] .comparison-header { border-color: #44464a; background: #2c2d30; }
 html[data-theme='dark'] .comparison-header span { color: #aaa; }
