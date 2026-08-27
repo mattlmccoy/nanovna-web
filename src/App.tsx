@@ -8,6 +8,7 @@ import { TdrPanel } from './components/TdrPanel';
 import { DEFAULT_DISPLAY_SETTINGS, DisplaySettingsPanel, type DisplaySettings } from './components/DisplaySettingsPanel';
 import { InstrumentPanel, type InstrumentReference } from './components/InstrumentPanel';
 import { DraftNumberInput } from './components/DraftNumberInput';
+import { DifferentialProbeWorkspace } from './components/DifferentialProbeWorkspace';
 
 type ViewMode = 'smith' | 'return-loss' | 's21-polar' | 'resistance-reactance' | 'admittance' | 'phase' | 'vswr' | 's21-gain' | 's21-magnitude' | 's11-magnitude' | 's11-z-magnitude' | 's11-components' | 's21-components' | 's11-group-delay' | 's21-group-delay' | 'q-factor' | 'capacitance' | 'inductance' | 's21-series-z' | 's21-shunt-z';
 type Marker = { id: number; index: number; color: string };
@@ -793,6 +794,7 @@ export default function App() {
   const [tdrOpen, setTdrOpen] = useState(false);
   const [displayOpen, setDisplayOpen] = useState(false);
   const [instrumentOpen, setInstrumentOpen] = useState(false);
+  const [workspace, setWorkspace] = useState<'measurement' | 'differential'>('measurement');
   const [instrumentReference, setInstrumentReference] = useState<InstrumentReference | null>(null);
   const [thereminRecording, setThereminRecording] = useState(false);
   const [comparisonDatasets, setComparisonDatasets] = useState<ComparisonDataset[]>([]);
@@ -1227,8 +1229,8 @@ export default function App() {
 
   return (
     <main className="application">
-      <div className="window-title"><span>NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} {samplesLabel}</span><div className="window-actions"><button onClick={() => setDisplayOpen(true)}>Display</button><button onClick={() => setHelpOpen(true)}>Help</button><button className="theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} mode`}>{theme === 'light' ? 'Dark' : 'Light'}</button></div></div>
-      <div className="main-grid">
+      <div className="window-title"><span>NanoVNA Web — {connected ? firmware : 'offline'} — {points.length} {samplesLabel}</span><nav className="workspace-tabs" aria-label="Workspace"><button className={workspace === 'measurement' ? 'active' : ''} onClick={() => setWorkspace('measurement')}>Measurement</button><button className={workspace === 'differential' ? 'active' : ''} onClick={() => setWorkspace('differential')}>Differential Probe</button></nav><div className="window-actions"><button onClick={() => setDisplayOpen(true)}>Display</button><button onClick={() => setHelpOpen(true)}>Help</button><button className="theme-toggle" onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')} aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} mode`}>{theme === 'light' ? 'Dark' : 'Light'}</button></div></div>
+      {workspace === 'measurement' ? <div className="main-grid">
         <aside className="controls-column">
           <fieldset><legend>Sweep control</legend>
             <div className="form-grid"><label>Start</label><input value={start} onChange={(e) => setStart(e.target.value)} /><label>Stop</label><input value={stop} onChange={(e) => setStop(e.target.value)} /><label>Points / segment</label><select value={pointCount} onChange={(e) => setPointCount(Number(e.target.value))}>{[11, 51, 101, 201, 301, 401, 801].map((value) => <option key={value}>{value}</option>)}</select><label>Segments</label><DraftNumberInput min="1" max="100" step="1" value={segments} onCommit={setSegments} /></div>
@@ -1307,7 +1309,7 @@ export default function App() {
         <section className="charts-grid">
           {views.map((view, index) => <Chart key={index} mode={view} points={points} reference={reference} markers={markers} activeMarker={activeMarker} theme={theme} exportContext={sourceInfo} displaySettings={displaySettings} onMarkerChange={updateMarker} onActiveMarkerChange={setActiveMarker} onModeChange={(mode) => setViews((current) => current.map((item, candidate) => candidate === index ? mode : item))} />)}
         </section>
-      </div>
+      </div> : <DifferentialProbeWorkspace points={points} markerIndex={markers[activeMarker]?.index ?? 0} context={{ device: firmware, session: connectionSession, calibration: calibrationState, processing: processingLabel, bandwidthHz: deviceBandwidth }} dataFresh={connected && !busy && sourceInfo.sourceKind === 'device' && !followStatus.startsWith('Stale')} sourceName={sourceInfo.sourceName} />}
       <div className="statusbar"><span>{message}</span><span className="status-actions"><a href="https://github.com/NanoVNA-Saver/nanovna-saver" target="_blank" rel="noreferrer">NanoVNA Saver</a><button onClick={() => setAboutOpen(true)}>About</button></span></div>
       {helpOpen && <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}>
         <section className="about-dialog help-dialog" role="dialog" aria-modal="true" aria-labelledby="help-title" onMouseDown={(event) => event.stopPropagation()}>
