@@ -11,7 +11,7 @@ function copySweep(points: SweepPoint[]) { return points.map((point) => ({ ...po
 function formatFrequency(value: number) { return value >= 1e6 ? `${(value / 1e6).toFixed(6)} MHz` : value >= 1e3 ? `${(value / 1e3).toFixed(3)} kHz` : `${value.toFixed(0)} Hz`; }
 function download(text: string, type: string, filename: string) { const url = URL.createObjectURL(new Blob([text], { type })); const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
 
-export function DifferentialProbeWorkspace({ points, markerIndex, context, dataFresh, sourceName }: { points: SweepPoint[]; markerIndex: number; context: DifferentialProbeContext; dataFresh: boolean; sourceName: string; }) {
+export function DifferentialProbeWorkspace({ points, markerIndex, context, dataFresh, sourceName, connected, busy, onToggleConnection }: { points: SweepPoint[]; markerIndex: number; context: DifferentialProbeContext; dataFresh: boolean; sourceName: string; connected: boolean; busy: boolean; onToggleConnection: () => Promise<void>; }) {
   const [captureTarget, setCaptureTarget] = useState(50);
   const [diagnosticIndex, setDiagnosticIndex] = useState(markerIndex);
   const [captures, setCaptures] = useState<SweepPoint[][]>([]);
@@ -81,6 +81,19 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
 
   useEffect(() => () => stopAudio(), []);
 
+  useEffect(() => {
+    stopAudio();
+    setCapturing(false);
+    setCaptures([]);
+    setBaseline(null);
+    setBaselineError('');
+    setRecording(false);
+    recordedFramesRef.current = [];
+    recordedSampleCountRef.current = 0;
+    setRecordedFrameCount(0);
+    setRecordingNote('');
+  }, [context.session]);
+
   function beginBaseline() { stopAudio(); setBaseline(null); setCaptures([]); setBaselineError(''); latestCaptureRef.current = null; setCapturing(true); }
   async function startAudio() {
     if (!baseline || !score?.valid || audioRef.current) return;
@@ -106,7 +119,7 @@ export function DifferentialProbeWorkspace({ points, markerIndex, context, dataF
 
   const baselineState = capturing ? `Capturing ${captures.length} of ${captureTarget}` : baseline ? `${baseline.sweepCount} sweeps · threshold ${baseline.threshold.toFixed(2)} σ-equivalent` : 'Not calibrated';
   return <section className="differential-workspace">
-    <header className="differential-intro"><div><h1>Differential Probe</h1><p>Sonified complex-S11 perturbation relative to a measured baseline. This is a spatial-sensitivity diagnostic, not a calibrated RF-leakage measurement.</p></div><div className={`differential-event ${eventActive ? 'active' : ''}`}><span>Detector</span><b>{!baseline ? 'Uncalibrated' : !dataFresh ? 'Stale' : eventActive ? 'CHANGE' : 'QUIET'}</b></div></header>
+    <header className="differential-intro"><div><h1>Differential Probe</h1><p>Sonified complex-S11 perturbation relative to a measured baseline. This is a spatial-sensitivity diagnostic, not a calibrated RF-leakage measurement.</p></div><div className="differential-header-actions"><button onClick={() => void onToggleConnection()} disabled={busy}>{busy ? 'Working…' : connected ? 'Disconnect VNA' : 'Connect to VNA'}</button><div className={`differential-event ${eventActive ? 'active' : ''}`}><span>Detector</span><b>{!connected ? 'DISCONNECTED' : !baseline ? 'Uncalibrated' : !dataFresh ? 'Stale' : eventActive ? 'CHANGE' : 'QUIET'}</b></div></div></header>
     <div className="differential-grid">
       <fieldset><legend>1 · Baseline</legend><label>Repeated sweeps<select value={captureTarget} onChange={(event) => setCaptureTarget(Number(event.target.value))} disabled={capturing}>{[20,30,50,75,100].map((value) => <option key={value}>{value}</option>)}</select></label><button className="wide" onClick={beginBaseline} disabled={!dataFresh || capturing}>{capturing ? 'Keep the setup still…' : 'Capture measured baseline'}</button><div className="instrument-status"><span>Status</span><b>{baselineState}</b><span>Validation false alarms</span><b>{baseline ? `${(baseline.validationFalseAlarmFraction * 100).toFixed(3)}% of held-out frequency samples` : '—'}</b></div>{baselineError && <small className="stale-status">{baselineError}</small>}<small>The first sweeps estimate the complex mean and regularized covariance. Held-out sweeps set the empirical silence threshold. Keep cables, objects, and people still during capture.</small></fieldset>
       <fieldset><legend>2 · Diagnostic channel</legend><label>RF frequency<select value={safeIndex} onChange={(event) => setDiagnosticIndex(Number(event.target.value))}>{points.map((candidate, index) => <option value={index} key={candidate.frequency}>{formatFrequency(candidate.frequency)}</option>)}</select></label><div className="instrument-status"><span>Selected frequency</span><b>{point ? formatFrequency(point.frequency) : '—'}</b><span>ΔΓ</span><b>{score?.valid ? `${score.deltaGammaRe.toExponential(3)} ${score.deltaGammaIm < 0 ? '−' : '+'} j${Math.abs(score.deltaGammaIm).toExponential(3)}` : '—'}</b><span>Normalized distance</span><b>{score?.valid ? score.distance.toFixed(2) : '—'}</b><span>Threshold</span><b>{baseline ? baseline.threshold.toFixed(2) : '—'}</b></div><label>Tone pitch<input type="number" min="80" max="2000" value={toneFrequency} onChange={(event) => setToneFrequency(Number(event.target.value))} /> Hz</label><label>Maximum gain<input type="range" min="0.005" max="0.05" step="0.005" value={maximumGain} onChange={(event) => setMaximumGain(Number(event.target.value))} /></label><div className="instrument-transport"><button onClick={() => void startAudio()} disabled={!baseline || !dataFresh || playing}>Start diagnostic audio</button><button onClick={stopAudio} disabled={!playing}>Stop</button></div><small>Pitch identifies the selected diagnostic channel. Loudness represents only the normalized excess above the measured baseline threshold. Two qualifying frames start an event; three frames below 80% of threshold release it.</small></fieldset>

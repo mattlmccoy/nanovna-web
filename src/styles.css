@@ -104,6 +104,8 @@ small { display: block; margin-top: 6px; color: #555; line-height: 1.35; }
 .differential-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 30px; max-width: 1180px; margin: 0 auto 16px; }
 .differential-intro h1 { margin: 0 0 5px; font-size: 24px; letter-spacing: -.025em; }
 .differential-intro p { max-width: 720px; margin: 0; color: #555; line-height: 1.45; }
+.differential-header-actions { display: grid; min-width: 170px; gap: 7px; }
+.differential-header-actions > button { width: 100%; }
 .differential-grid { display: grid; max-width: 1180px; margin: 0 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .differential-grid fieldset { align-self: start; }
 .differential-grid fieldset > label { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(90px, 1fr) auto; align-items: center; gap: 7px; margin: 7px 0; }
